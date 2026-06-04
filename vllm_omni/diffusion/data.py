@@ -878,8 +878,19 @@ class OmniDiffusionConfig:
         try:
             config_dict = get_hf_file_to_dict("model_index.json", self.model)
             if config_dict is not None:
+                tf_config_dict = None
+                if self.diffusion_load_format != "diffusers":
+                    tf_config_dict = get_hf_file_to_dict("transformer/config.json", self.model) or {}
+
                 if self.model_class_name is None:
-                    self.model_class_name = config_dict.get("_class_name", None)
+                    from vllm_omni.diffusion.models.wan2_1.model_index import (
+                        resolve_wan21_pipeline_class_name,
+                    )
+
+                    self.model_class_name = (
+                        resolve_wan21_pipeline_class_name(self.model, config_dict, tf_config_dict)
+                        or config_dict.get("_class_name", None)
+                    )
                 self.update_multimodal_support()
 
                 # Skip transformer config loading for diffusers adapter
@@ -896,7 +907,6 @@ class OmniDiffusionConfig:
                             exc,
                         )
                 else:
-                    tf_config_dict = get_hf_file_to_dict("transformer/config.json", self.model)
                     self.set_tf_model_config(TransformerConfig.from_dict(tf_config_dict))
             else:
                 raise FileNotFoundError("model_index.json not found")

@@ -11,7 +11,7 @@ This example demonstrates how to deploy text-to-video models for online video ge
 | Wan2.2 T2V | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` |
 | LTX-2 | `Lightricks/LTX-2` |
 
-## Wan2.2 T2V
+## Wan T2V
 
 ### Start Server
 
@@ -20,6 +20,15 @@ This example demonstrates how to deploy text-to-video models for online video ge
 ```bash
 vllm serve Wan-AI/Wan2.2-T2V-A14B-Diffusers --omni --port 8091
 ```
+
+Wan2.1 T2V can be served with the same endpoint:
+
+```bash
+vllm serve Wan-AI/Wan2.1-T2V-1.3B-Diffusers --omni --port 8091
+```
+
+When serving Wan2.1, omit Wan2.2 MoE-only request fields such as
+`boundary_ratio` and `guidance_scale_2`.
 
 #### Start with Parameters
 
@@ -32,7 +41,7 @@ bash run_server.sh
 The script allows overriding:
 - `MODEL` (default: `Wan-AI/Wan2.2-T2V-A14B-Diffusers`)
 - `PORT` (default: `8091`)
-- `BOUNDARY_RATIO` (default: `0.875`)
+- `BOUNDARY_RATIO` (default: unset for Wan2.1, `0.875` for Wan2.2)
 - `FLOW_SHIFT` (default: `5.0`)
 - `CACHE_BACKEND` (default: `none`)
 - `ENABLE_CACHE_DIT_SUMMARY` (default: `0`)
@@ -75,8 +84,6 @@ curl -X POST http://localhost:8091/v1/videos/sync \
   -F "fps=16" \
   -F "num_inference_steps=40" \
   -F "guidance_scale=4.0" \
-  -F "guidance_scale_2=4.0" \
-  -F "boundary_ratio=0.875" \
   -F "flow_shift=5.0" \
   -F "seed=42" \
   -o sync_t2v_output.mp4
@@ -105,6 +112,9 @@ export VLLM_OMNI_STORAGE_MAX_CONCURRENCY=8
 # Basic text-to-video generation
 bash run_curl_text_to_video.sh
 
+# Wan2.1 text-to-video generation
+MODEL=Wan-AI/Wan2.1-T2V-1.3B-Diffusers bash run_curl_text_to_video.sh
+
 # Or execute directly (OpenAI-style multipart)
 create_response=$(curl -s http://localhost:8091/v1/videos \
   -H "Accept: application/json" \
@@ -116,8 +126,6 @@ create_response=$(curl -s http://localhost:8091/v1/videos \
   -F "fps=16" \
   -F "num_inference_steps=40" \
   -F "guidance_scale=4.0" \
-  -F "guidance_scale_2=4.0" \
-  -F "boundary_ratio=0.875" \
   -F "flow_shift=5.0" \
   -F "seed=42")
 
@@ -135,7 +143,7 @@ while true; do
 done
 
 curl -s "http://localhost:8091/v1/videos/${video_id}" | jq .
-curl -L "http://localhost:8091/v1/videos/${video_id}/content" -o wan22_output.mp4
+curl -L "http://localhost:8091/v1/videos/${video_id}/content" -o wan_output.mp4
 ```
 
 ## Request Format
@@ -159,8 +167,6 @@ curl -X POST http://localhost:8091/v1/videos \
   -F "fps=16" \
   -F "num_inference_steps=40" \
   -F "guidance_scale=4.0" \
-  -F "guidance_scale_2=4.0" \
-  -F "boundary_ratio=0.875" \
   -F "flow_shift=5.0" \
   -F "seed=42"
 ```
@@ -181,7 +187,7 @@ curl -X POST http://localhost:8091/v1/videos \
 | `guidance_scale`      | float  | None    | CFG guidance scale (low-noise stage)             |
 | `guidance_scale_2`    | float  | None    | CFG guidance scale (high-noise stage, Wan2.2)     |
 | `boundary_ratio`      | float  | None    | Boundary split ratio for low/high DiT (Wan2.2)   |
-| `flow_shift`          | float  | None    | Scheduler flow shift (Wan2.2)                    |
+| `flow_shift`          | float  | None    | Scheduler flow shift for Wan video pipelines     |
 | `seed`                | int    | None    | Random seed (reproducible)                       |
 | `lora`                | object | None    | LoRA configuration                               |
 

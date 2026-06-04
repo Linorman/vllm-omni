@@ -242,6 +242,53 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> Callable[[int], 
     return refresh_cache_context
 
 
+def enable_cache_for_wan21(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
+    """Enable cache-dit for Wan2.1 single-transformer pipelines.
+
+    Wan2.1 Diffusers checkpoints use one transformer under ``transformer`` and
+    do not have Wan2.2's ``transformer_2`` or boundary-ratio split.
+    """
+
+    transformer = getattr(pipeline, "transformer", None)
+    blocks = getattr(transformer, "blocks", None)
+    if transformer is None or blocks is None:
+        raise ValueError("Wan2.1 cache-dit expects pipeline.transformer.blocks.")
+
+    db_cache_config = _build_db_cache_config(cache_config)
+    cache_dit.enable_cache(
+        BlockAdapter(
+            transformer=transformer,
+            blocks=[blocks],
+            forward_pattern=[ForwardPattern.Pattern_2],
+            params_modifiers=[
+                ParamsModifier(cache_config=db_cache_config),
+            ],
+            has_separate_cfg=True,
+        ),
+        cache_config=db_cache_config,
+    )
+
+    def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
+        transformer = pipeline.transformer
+        if cache_config.scm_steps_mask_policy is None:
+            cache_dit.refresh_context(transformer, num_inference_steps=num_inference_steps, verbose=verbose)
+        else:
+            cache_dit.refresh_context(
+                transformer,
+                cache_config=DBCacheConfig().reset(
+                    num_inference_steps=num_inference_steps,
+                    steps_computation_mask=cache_dit.steps_mask(
+                        mask_policy=cache_config.scm_steps_mask_policy,
+                        total_steps=num_inference_steps,
+                    ),
+                    steps_computation_policy=cache_config.scm_steps_policy,
+                ),
+                verbose=verbose,
+            )
+
+    return refresh_cache_context
+
+
 def enable_cache_for_longcat_image(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
     """Enable cache-dit for LongCatImage pipeline.
 
@@ -1808,6 +1855,9 @@ CUSTOM_DIT_ENABLERS.update(
     {
         "Wan22Pipeline": enable_cache_for_wan22,
         "Wan22I2VPipeline": enable_cache_for_wan22,
+        "Wan21Pipeline": enable_cache_for_wan21,
+        "Wan21I2VPipeline": enable_cache_for_wan21,
+        "Wan21VACEPipeline": enable_cache_for_wan21,
         "HunyuanImage3Pipeline": enable_cache_for_hunyuan_image3,
         "FluxPipeline": enable_cache_for_flux,
         "Flux2KleinPipeline": enable_cache_for_flux2_klein,

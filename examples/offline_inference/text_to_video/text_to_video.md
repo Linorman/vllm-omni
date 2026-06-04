@@ -6,11 +6,30 @@ A unified script for text-to-video generation. Supports multiple models with mod
 
 | Model | Default Resolution | Default Frames | Default Steps | Guidance | VRAM (BF16) |
 |---|---|---|---|---|---|
+| `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | 480x832 | 81 | 40 | 4.0 | ~10 GiB |
+| `Wan-AI/Wan2.1-T2V-14B-Diffusers` | 720x1280 | 81 | 40 | 4.0 | ~60 GiB |
 | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | 720x1280 | 81 | 40 | 4.0 | ~60 GiB |
 | `hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v` | 480x832 | 121 | 50 | 6.0 | 1×A100 80GB |
 | `hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v` | 720x1280 | 121 | 50 | 6.0 | FP8 + VAE tiling required |
 
 ## Local CLI Usage
+
+### Wan2.1
+
+```bash
+python text_to_video.py \
+  --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
+  --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
+  --negative-prompt "<optional quality filter>" \
+  --height 480 \
+  --width 832 \
+  --num-frames 33 \
+  --guidance-scale 4.0 \
+  --flow-shift 5.0 \
+  --num-inference-steps 40 \
+  --fps 16 \
+  --output wan21_t2v_out.mp4
+```
 
 ### Wan2.2 (default)
 
@@ -123,12 +142,12 @@ python text_to_video.py \
 - `--quantization`: quantization method (`fp8` for FP8, `gguf` for GGUF).
 - `--flow-shift`: scheduler flow_shift parameter.
 
-### Wan2.2-specific
+### Wan-specific
 
 - `--negative-prompt`: artifacts to suppress.
-- `--guidance-scale-high`: separate CFG scale for high-noise stage.
-- `--boundary-ratio`: boundary split for low/high DiT (default 0.875).
-- `--flow-shift`: scheduler flow_shift (5.0 for 720p, 12.0 for 480p).
+- `--guidance-scale-high`: separate CFG scale for high-noise stage (Wan2.2 MoE only).
+- `--boundary-ratio`: boundary split for low/high DiT. Leave unset for Wan2.1 single-transformer models.
+- `--flow-shift`: scheduler flow_shift.
 - `--cache-backend`: `cache_dit` for acceleration.
 
 ### HunyuanVideo-1.5 Optimal Configs

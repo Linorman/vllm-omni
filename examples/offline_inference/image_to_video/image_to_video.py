@@ -2,9 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 """
-Image-to-Video generation example using Wan2.2 I2V/TI2V models, LTX2, or HunyuanVideo-1.5.
+Image-to-Video generation example using Wan2.1/Wan2.2 I2V/TI2V models, LTX2, or HunyuanVideo-1.5.
 
 Supports:
+- Wan2.1-I2V-14B-480P/720P-Diffusers: single-transformer I2V with CLIP image encoder
 - Wan2.2-I2V-A14B-Diffusers: MoE model with CLIP image encoder
 - Wan2.2-TI2V-5B-Diffusers: Unified T2V+I2V model (dense 5B)
 - LTX2 image-to-video pipeline
@@ -13,6 +14,10 @@ Supports:
 Usage:
     # Wan I2V-A14B (MoE)
     python image_to_video.py --model Wan-AI/Wan2.2-I2V-A14B-Diffusers \
+        --image input.jpg --prompt "A cat playing with yarn"
+
+    # Wan2.1 I2V 480P
+    python image_to_video.py --model Wan-AI/Wan2.1-I2V-14B-480P-Diffusers \
         --image input.jpg --prompt "A cat playing with yarn"
 
     # TI2V-5B (unified)
@@ -60,11 +65,13 @@ def parse_profiler_config(value: str) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate a video from an image (Wan2.2, LTX2, HunyuanVideo-1.5).")
+    parser = argparse.ArgumentParser(
+        description="Generate a video from an image (Wan2.1, Wan2.2, LTX2, HunyuanVideo-1.5)."
+    )
     parser.add_argument(
         "--model",
         default="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
-        help="Diffusers I2V model ID or local path (Wan2.2 or HunyuanVideo-1.5).",
+        help="Diffusers I2V model ID or local path (Wan2.1, Wan2.2, or HunyuanVideo-1.5).",
     )
     parser.add_argument(
         "--model-class-name",
@@ -85,7 +92,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=None, help="Video width (auto-calculated from image if not set).")
     parser.add_argument("--num-frames", type=int, default=81, help="Number of frames.")
     parser.add_argument("--num-inference-steps", type=int, default=50, help="Sampling steps.")
-    parser.add_argument("--boundary-ratio", type=float, default=0.875, help="Boundary split ratio for MoE models.")
+    parser.add_argument("--boundary-ratio", type=float, default=None, help="Boundary split ratio for MoE models.")
     parser.add_argument(
         "--frame-rate",
         type=float,
@@ -100,7 +107,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="unipc",
         choices=["unipc", "euler"],
-        help="Sampling solver for Wan2.2 pipelines. Use 'euler' for Lightning/Distill setups.",
+        help="Sampling solver for Wan pipelines. Use 'euler' for Lightning/Distill setups.",
     )
     parser.add_argument(
         "--diffusion-kv-cache-dtype",
@@ -283,7 +290,7 @@ def main():
     height = args.height
     width = args.width
     if height is None or width is None:
-        # Default to 480P area for Wan2.2 I2V, 512x768 area for LTX2
+        # Default to 480P area for Wan I2V, 512x768 area for LTX2
         max_area = 512 * 768 if is_ltx2 else 480 * 832
         mod_value = 32 if is_ltx2 else 16
         calc_height, calc_width = calculate_dimensions(image, max_area=max_area, mod_value=mod_value)
@@ -341,7 +348,6 @@ def main():
         enable_layerwise_offload=args.enable_layerwise_offload,
         vae_use_slicing=args.vae_use_slicing,
         vae_use_tiling=args.vae_use_tiling,
-        boundary_ratio=args.boundary_ratio,
         flow_shift=args.flow_shift,
         diffusion_kv_cache_dtype=args.diffusion_kv_cache_dtype,
         diffusion_kv_cache_skip_steps=args.diffusion_kv_cache_skip_steps,
@@ -355,6 +361,8 @@ def main():
         enable_diffusion_pipeline_profiler=args.enable_diffusion_pipeline_profiler,
         profiler_config=args.profiler_config,
     )
+    if args.boundary_ratio is not None:
+        omni_kwargs["boundary_ratio"] = args.boundary_ratio
     if args.quantization is not None:
         omni_kwargs["quantization"] = args.quantization
     omni = Omni(**omni_kwargs)

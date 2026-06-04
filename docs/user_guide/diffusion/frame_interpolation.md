@@ -28,6 +28,9 @@ Frame interpolation is currently supported for:
 
 - `WanPipeline` (Wan2.2 text-to-video)
 - `WanImageToVideoPipeline`
+- `Wan21Pipeline`
+- `Wan21I2VPipeline`
+- `Wan21VACEPipeline`
 
 ## Request Parameters
 
@@ -42,7 +45,7 @@ The video APIs `/v1/videos` and `/v1/videos/sync` accept:
 
 ## Execution Flow
 
-For supported Wan2.2 pipelines, the execution order is:
+For supported Wan pipelines, the execution order is:
 
 1. Diffusion worker finishes denoising and decodes the raw video tensor.
 2. Worker-side model-specific post-processing runs.
@@ -73,7 +76,6 @@ curl -X POST http://localhost:8091/v1/videos/sync \
   -F "fps=16" \
   -F "num_inference_steps=40" \
   -F "guidance_scale=1.0" \
-  -F "guidance_scale_2=1.0" \
   -F "enable_frame_interpolation=true" \
   -F "frame_interpolation_exp=1" \
   -F "frame_interpolation_scale=1.0" \

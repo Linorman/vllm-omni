@@ -58,13 +58,13 @@ def parse_profiler_config(value: str) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate a video from a text prompt. "
-        "Supports Wan2.2, HunyuanVideo-1.5, and other text-to-video models."
+        "Supports Wan2.1, Wan2.2, HunyuanVideo-1.5, and other text-to-video models."
     )
     parser.add_argument(
         "--model",
         default="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
         help="Diffusers model ID or local path. "
-        "Examples: Wan-AI/Wan2.2-T2V-A14B-Diffusers, "
+        "Examples: Wan-AI/Wan2.1-T2V-1.3B-Diffusers, Wan-AI/Wan2.2-T2V-A14B-Diffusers, "
         "hunyuanvideo-community/HunyuanVideo-1.5-480p_t2v",
     )
     parser.add_argument(
@@ -77,7 +77,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--guidance-scale", type=float, default=None, help="CFG scale. Default: model-specific.")
     parser.add_argument(
-        "--guidance-scale-high", type=float, default=None, help="Separate CFG for high-noise stage (Wan2.2 only)."
+        "--guidance-scale-high", type=float, default=None, help="Separate CFG for high-noise stage (Wan2.2 MoE only)."
     )
     parser.add_argument("--height", type=int, default=None, help="Video height. Default: model-specific.")
     parser.add_argument("--width", type=int, default=None, help="Video width. Default: model-specific.")
@@ -108,7 +108,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         choices=["cache_dit"],
-        help="Cache backend for acceleration (Wan2.2). Default: None.",
+        help="Cache backend for acceleration. Default: None.",
     )
     parser.add_argument(
         "--enable-cache-dit-summary",
@@ -268,7 +268,7 @@ def main():
             setattr(args, key.replace("-", "_"), default_val)
 
     generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
-    # Cache-dit config (Wan2.2 only)
+    # Cache-dit config
     cache_config = None
     if args.cache_backend == "cache_dit":
         cache_config = {

@@ -15,6 +15,15 @@ Each server instance runs a single model specified at startup with
 vllm serve Wan-AI/Wan2.2-T2V-A14B-Diffusers --omni --port 8091
 ```
 
+Wan2.1 T2V/I2V models use the same endpoints:
+
+```bash
+vllm serve Wan-AI/Wan2.1-T2V-1.3B-Diffusers --omni --port 8091
+```
+
+For Wan2.1 requests, omit Wan2.2 MoE-only fields such as `boundary_ratio` and
+`guidance_scale_2`.
+
 ### Create a Video Job
 
 ```bash
@@ -75,9 +84,9 @@ curl -L "http://localhost:8091/v1/videos/${video_id}/content" -o output.mp4
 | `fps` | integer | model default | Output frames per second |
 | `num_inference_steps` | integer | model default | Number of diffusion steps |
 | `guidance_scale` | number | null | CFG guidance scale for the low-noise stage |
-| `guidance_scale_2` | number | null | CFG guidance scale for the high-noise stage |
-| `boundary_ratio` | number | null | Boundary split ratio for multi-stage denoising |
-| `flow_shift` | number | null | Scheduler flow-shift value |
+| `guidance_scale_2` | number | null | CFG guidance scale for the high-noise stage (Wan2.2 MoE) |
+| `boundary_ratio` | number | null | Boundary split ratio for multi-stage denoising (Wan2.2 MoE; omit for Wan2.1) |
+| `flow_shift` | number | null | Scheduler flow-shift value for Wan video pipelines |
 | `true_cfg_scale` | number | null | True CFG scale when supported by the model |
 | `seed` | integer | null | Random seed for reproducibility |
 | `negative_prompt` | string | null | Text describing what to avoid in the generated video |

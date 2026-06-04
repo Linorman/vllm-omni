@@ -4,6 +4,7 @@
 from typing import Literal
 
 import torch
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.attention.backends.abstract import (
@@ -16,6 +17,14 @@ logger = init_logger(__name__)
 
 
 SDPAMaskMode = Literal["broadcast_k", "full_qk"]
+
+
+def _non_cudnn_sdpa_backends() -> list[SDPBackend]:
+    return [
+        getattr(SDPBackend, name)
+        for name in ("FLASH_ATTENTION", "EFFICIENT_ATTENTION", "MATH")
+        if hasattr(SDPBackend, name)
+    ]
 
 
 def _maybe_reshape_attn_mask(
@@ -71,7 +80,19 @@ class SDPABackend(AttentionBackend):
         return SDPAImpl
 
 
+class NoCuDNNSDPABackend(SDPABackend):
+    @staticmethod
+    def get_name() -> str:
+        return "SDPA_NO_CUDNN"
+
+    @staticmethod
+    def get_impl_cls() -> type["NoCuDNNSDPAImpl"]:
+        return NoCuDNNSDPAImpl
+
+
 class SDPAImpl(AttentionImpl):
+    sdpa_backends: list[SDPBackend] | None = None
+
     def __init__(
         self,
         num_heads: int,
@@ -104,16 +125,29 @@ class SDPAImpl(AttentionImpl):
             attention_mask = _maybe_reshape_attn_mask(query, key, attn_metadata.attn_mask, mask_mode=mask_mode)
 
         query, key, value = (x.permute(0, 2, 1, 3) for x in (query, key, value))
-        output = torch.nn.functional.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            attn_mask=attention_mask,
-            dropout_p=0.0,
-            is_causal=self.causal,
-            scale=self.softmax_scale,
-            enable_gqa=self.requires_gqa,
-        )
+        if self.sdpa_backends is None:
+            output = torch.nn.functional.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask=attention_mask,
+                dropout_p=0.0,
+                is_causal=self.causal,
+                scale=self.softmax_scale,
+                enable_gqa=self.requires_gqa,
+            )
+        else:
+            with sdpa_kernel(self.sdpa_backends):
+                output = torch.nn.functional.scaled_dot_product_attention(
+                    query,
+                    key,
+                    value,
+                    attn_mask=attention_mask,
+                    dropout_p=0.0,
+                    is_causal=self.causal,
+                    scale=self.softmax_scale,
+                    enable_gqa=self.requires_gqa,
+                )
         out = output.permute(0, 2, 1, 3)
         return out
 
@@ -152,3 +186,7 @@ class SDPAImpl(AttentionImpl):
         attn_metadata: AttentionMetadata | None = None,
     ) -> torch.Tensor:
         return self._forward_impl(query, key, value, attn_metadata, mask_mode="full_qk")
+
+
+class NoCuDNNSDPAImpl(SDPAImpl):
+    sdpa_backends = _non_cudnn_sdpa_backends()

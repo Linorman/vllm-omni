@@ -1,14 +1,43 @@
 #!/bin/bash
-# Wan2.2 image-to-video curl example using the async video job API.
+# Wan image-to-video curl example using the async video job API.
 
 set -euo pipefail
 
+MODEL="${MODEL:-Wan-AI/Wan2.2-I2V-A14B-Diffusers}"
 INPUT_IMAGE="${INPUT_IMAGE:-../../offline_inference/image_to_video/qwen-bear.png}"
 BASE_URL="${BASE_URL:-http://localhost:8099}"
-OUTPUT_PATH="${OUTPUT_PATH:-wan22_i2v_output.mp4}"
+PROMPT="${PROMPT:-A bear playing with yarn, smooth motion}"
 NEGATIVE_PROMPT="${NEGATIVE_PROMPT:-}"
 SAMPLE_SOLVER="${SAMPLE_SOLVER:-}"
 POLL_INTERVAL="${POLL_INTERVAL:-2}"
+SIZE="${SIZE:-832x480}"
+CLIP_SECONDS="${CLIP_SECONDS:-2}"
+FPS="${FPS:-16}"
+NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-40}"
+SEED="${SEED:-42}"
+
+IS_WAN21=0
+if [[ "${MODEL}" == *"Wan2.1"* || "${MODEL}" == *"wan2.1"* ]]; then
+  IS_WAN21=1
+fi
+
+if [ "${IS_WAN21}" = "1" ]; then
+  GUIDANCE_SCALE="${GUIDANCE_SCALE:-5.0}"
+  FLOW_SHIFT="${FLOW_SHIFT:-5.0}"
+else
+  GUIDANCE_SCALE="${GUIDANCE_SCALE:-1.0}"
+  GUIDANCE_SCALE_2="${GUIDANCE_SCALE_2:-1.0}"
+  BOUNDARY_RATIO="${BOUNDARY_RATIO:-0.875}"
+  FLOW_SHIFT="${FLOW_SHIFT:-12.0}"
+fi
+
+if [ -z "${OUTPUT_PATH:-}" ]; then
+  if [ "${IS_WAN21}" = "1" ]; then
+    OUTPUT_PATH="wan21_i2v_output.mp4"
+  else
+    OUTPUT_PATH="wan22_i2v_output.mp4"
+  fi
+fi
 
 if [ ! -f "$INPUT_IMAGE" ]; then
     echo "Input image not found: $INPUT_IMAGE"
@@ -18,18 +47,24 @@ fi
 create_cmd=(
   curl -sS -X POST "${BASE_URL}/v1/videos"
   -H "Accept: application/json"
-  -F "prompt=A bear playing with yarn, smooth motion"
+  -F "model=${MODEL}"
+  -F "prompt=${PROMPT}"
   -F "input_reference=@${INPUT_IMAGE}"
-  -F "seconds=2"
-  -F "size=832x480"
-  -F "fps=16"
-  -F "num_inference_steps=40"
-  -F "guidance_scale=1.0"
-  -F "guidance_scale_2=1.0"
-  -F "boundary_ratio=0.875"
-  -F "flow_shift=12.0"
-  -F "seed=42"
+  -F "seconds=${CLIP_SECONDS}"
+  -F "size=${SIZE}"
+  -F "fps=${FPS}"
+  -F "num_inference_steps=${NUM_INFERENCE_STEPS}"
+  -F "guidance_scale=${GUIDANCE_SCALE}"
+  -F "flow_shift=${FLOW_SHIFT}"
+  -F "seed=${SEED}"
 )
+
+if [ "${IS_WAN21}" != "1" ]; then
+  create_cmd+=(
+    -F "guidance_scale_2=${GUIDANCE_SCALE_2}"
+    -F "boundary_ratio=${BOUNDARY_RATIO}"
+  )
+fi
 
 if [ -n "${NEGATIVE_PROMPT}" ]; then
   create_cmd+=(-F "negative_prompt=${NEGATIVE_PROMPT}")

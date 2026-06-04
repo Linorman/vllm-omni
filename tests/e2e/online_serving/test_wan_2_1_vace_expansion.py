@@ -2,11 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 """
-Comprehensive e2e tests of diffusion features for Wan2.1-VACE in online serving mode.
-
-Wan2.1-VACE supports: Cache-DiT, Ulysses-SP, Ring, CFG-Parallel, TP,
-VAE-Patch-Parallel, HSDP. TeaCache is NOT supported for this model, so
-Cache-DiT is used in place of TeaCache for single-card and CFG tests.
+GPU acceptance coverage for Wan2.1-VACE native transformer features.
 
 Uses the 1.3B variant for faster CI testing.
 
@@ -14,11 +10,11 @@ Coverage:
   Single GPU:
     - Cache-DiT + layerwise CPU offload
   Two GPUs:
-    - Cache-DiT + Ulysses-SP = 2
-    - Cache-DiT + Ring = 2
-    - Cache-DiT + CFG-Parallel = 2
-    - Cache-DiT + TP = 2 + VAE-Patch-Parallel = 2
-    - Cache-DiT + HSDP = 2 + VAE-Patch-Parallel = 2
+    - Ulysses-SP = 2
+    - Ring = 2
+    - CFG-Parallel = 2
+    - TP = 2 + VAE-Patch-Parallel = 2
+    - HSDP = 2 + VAE-Patch-Parallel = 2
 """
 
 import pytest
@@ -51,14 +47,12 @@ def _get_vace_feature_cases():
             id="single_card_001",
             marks=SINGLE_CARD_FEATURE_MARKS,
         ),
-        # 2 GPUs: Cache-DiT + Ulysses-SP = 2
+        # 2 GPUs: Ulysses-SP = 2
         pytest.param(
             OmniServerParams(
                 model=MODEL,
                 server_args=[
-                    "--cache-backend",
-                    "cache_dit",
-                    "--ulysses-degree",
+                    "--usp",
                     "2",
                     "--vae-use-tiling",
                 ],
@@ -66,13 +60,11 @@ def _get_vace_feature_cases():
             id="parallel_001",
             marks=PARALLEL_FEATURE_MARKS,
         ),
-        # 2 GPUs: Cache-DiT + Ring = 2
+        # 2 GPUs: Ring = 2
         pytest.param(
             OmniServerParams(
                 model=MODEL,
                 server_args=[
-                    "--cache-backend",
-                    "cache_dit",
                     "--ring",
                     "2",
                     "--vae-use-tiling",
@@ -81,13 +73,11 @@ def _get_vace_feature_cases():
             id="parallel_002",
             marks=PARALLEL_FEATURE_MARKS,
         ),
-        # 2 GPUs: Cache-DiT + CFG-Parallel = 2
+        # 2 GPUs: CFG-Parallel = 2
         pytest.param(
             OmniServerParams(
                 model=MODEL,
                 server_args=[
-                    "--cache-backend",
-                    "cache_dit",
                     "--cfg-parallel-size",
                     "2",
                     "--vae-use-tiling",
@@ -96,13 +86,11 @@ def _get_vace_feature_cases():
             id="parallel_003",
             marks=PARALLEL_FEATURE_MARKS,
         ),
-        # 2 GPUs: Cache-DiT + TP = 2 + VAE-Patch-Parallel = 2
+        # 2 GPUs: TP = 2 + VAE-Patch-Parallel = 2
         pytest.param(
             OmniServerParams(
                 model=MODEL,
                 server_args=[
-                    "--cache-backend",
-                    "cache_dit",
                     "--tensor-parallel-size",
                     "2",
                     "--vae-patch-parallel-size",
@@ -113,13 +101,12 @@ def _get_vace_feature_cases():
             id="parallel_004",
             marks=PARALLEL_FEATURE_MARKS,
         ),
-        # 2 GPUs: Cache-DiT + HSDP = 2 + VAE-Patch-Parallel = 2
+        # 2 GPUs: HSDP = 2 + VAE-Patch-Parallel = 2
         pytest.param(
             OmniServerParams(
                 model=MODEL,
                 server_args=[
-                    "--cache-backend",
-                    "cache_dit",
+                    "--use-hsdp",
                     "--hsdp-shard-size",
                     "2",
                     "--vae-patch-parallel-size",
