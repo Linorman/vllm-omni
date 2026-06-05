@@ -36,7 +36,7 @@ m = Omni(model="Wan-AI/Wan2.2-T2V-A14B-Diffusers", enable_cpu_offload=True)
 vllm-omni serve diffusion Wan-AI/Wan2.2-T2V-A14B-Diffusers --enable-cpu-offload
 ```
 
-Wan2.1 T2V/I2V/VACE pipelines use the same offload flags.
+Wan2.1 T2V/I2V/FLF2V/VACE pipelines use the same offload flags.
 
 ### To Support a Model
 
@@ -127,7 +127,7 @@ vllm-omni serve diffusion Wan-AI/Wan2.2-T2V-A14B-Diffusers --enable-layerwise-of
 vllm-omni serve diffusion Wan-AI/Wan2.2-I2V-A14B-Diffusers --enable-layerwise-offload
 ```
 
-Replace the model ID with a supported Wan2.1 T2V/I2V/VACE checkpoint to use the
+Replace the model ID with a supported Wan2.1 T2V/I2V/FLF2V/VACE checkpoint to use the
 same layerwise offload path.
 
 ### To Support a Model
@@ -199,9 +199,10 @@ Factory function `get_offload_backend()` selects the appropriate backend based o
 | OvisImagePipeline | `AIDC-AI/Ovis-Image-7B` | `OvisImageTransformer2DModel` | - | ✓ | `"transformer"` |
 | QwenImagePipeline | `Qwen/Qwen-Image` | `QwenImageTransformer2DModel` | ✓ | ✓ | `"transformer_blocks"` |
 | StableDiffusion3Pipeline | `stabilityai/stable-diffusion-3.5-medium` | `SD3Transformer2DModel` | - | ✓ | `"transformer_blocks"` |
-| Wan21Pipeline | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | `Wan21Transformer3DModel` | ✓ | ✓ | `"blocks"` |
-| Wan21I2VPipeline | `Wan-AI/Wan2.1-I2V-14B-480P-Diffusers` | `Wan21Transformer3DModel` | ✓ | ✓ | `"blocks"` |
-| Wan21VACEPipeline | `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | `Wan21VACETransformer3DModel` | ✓ | ✓ | `"blocks"`, `"vace_blocks"` |
+| Wan21Pipeline | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`, `Wan-AI/Wan2.1-T2V-14B-Diffusers` | `Wan21Transformer3DModel` | ✓ | ✓ | `"blocks"` |
+| Wan21I2VPipeline | `Wan-AI/Wan2.1-I2V-14B-480P-Diffusers`, `Wan-AI/Wan2.1-I2V-14B-720P-Diffusers` | `Wan21Transformer3DModel` | ✓ | ✓ | `"blocks"` |
+| Wan21FLF2VPipeline | `Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers` | `Wan21Transformer3DModel` | ✓ | ✓ | `"blocks"` |
+| Wan21VACEPipeline | `Wan-AI/Wan2.1-VACE-1.3B-diffusers`, `Wan-AI/Wan2.1-VACE-14B-diffusers` | `Wan21VACETransformer3DModel` | ✓ | ✓ | `"blocks"`, `"vace_blocks"` |
 | Wan22I2VPipeline | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | `WanTransformer3DModel` | ✓ | ✓ | `"blocks"` |
 | Wan22Pipeline | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | `WanTransformer3DModel` | ✓ | ✓ | `"blocks"` |
 | BagelPipeline | `ByteDance-Seed/BAGEL-7B-MoT` | `Qwen2MoTModel` | - | ✓ | `"layers"`, `"customized modules"` |

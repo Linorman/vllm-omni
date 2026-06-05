@@ -22,6 +22,7 @@ from transformers import (
     CLIPVisionModel,
     UMT5EncoderModel,
 )
+from vllm.sequence import IntermediateTensors
 
 from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm_omni.diffusion.data import (
@@ -35,7 +36,12 @@ from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import (
     DistributedAutoencoderKLWan,
 )
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
+from vllm_omni.diffusion.distributed.pipeline_parallel import (
+    AsyncLatents,
+    PipelineParallelMixin,
+)
 from vllm_omni.diffusion.distributed.utils import get_local_device
+from vllm_omni.diffusion.forward_context import set_forward_context_denoise_step_idx
 from vllm_omni.diffusion.model_loader.diffusers_loader import (
     DiffusersPipelineLoader,
 )
@@ -130,6 +136,7 @@ def load_transformer_config(
 def _make_wan_transformer_kwargs(config: dict[str, Any]) -> dict[str, Any]:
     keys = {
         "attention_head_dim",
+        "added_kv_proj_dim",
         "cross_attn_norm",
         "eps",
         "ffn_dim",
@@ -207,6 +214,16 @@ def build_wan21_scheduler(flow_shift: float) -> FlowUniPCMultistepScheduler:
     )
 
 
+def resolve_wan21_default_flow_shift(model: str | None) -> float:
+    if model:
+        normalized = str(model).replace("\\", "/").lower()
+        if "flf2v" in normalized:
+            return 16.0
+        if "i2v" in normalized and "720p" in normalized:
+            return 5.0
+    return 3.0
+
+
 def resolve_wan21_sample_solver(
     req: OmniDiffusionRequest,
     default: str = "unipc",
@@ -229,7 +246,11 @@ def resolve_wan21_flow_shift(
     extra_args = getattr(req.sampling_params, "extra_args", {}) or {}
     raw_flow_shift = extra_args.get("flow_shift")
     if raw_flow_shift is None:
-        raw_flow_shift = od_config.flow_shift if od_config.flow_shift is not None else 5.0
+        raw_flow_shift = (
+            od_config.flow_shift
+            if od_config.flow_shift is not None
+            else resolve_wan21_default_flow_shift(getattr(od_config, "model", None))
+        )
     try:
         return float(raw_flow_shift)
     except (TypeError, ValueError) as exc:
@@ -338,6 +359,10 @@ def get_wan21_i2v_post_process_func(od_config: OmniDiffusionConfig):
     return get_wan21_video_post_process_func(od_config)
 
 
+def get_wan21_flf2v_post_process_func(od_config: OmniDiffusionConfig):
+    return get_wan21_video_post_process_func(od_config)
+
+
 def get_wan21_vace_post_process_func(od_config: OmniDiffusionConfig):
     return get_wan21_video_post_process_func(od_config)
 
@@ -390,6 +415,106 @@ def get_wan21_i2v_pre_process_func(od_config: OmniDiffusionConfig):
                 PIL.Image.Resampling.LANCZOS,
             )
             multi_modal_data["image"] = image
+            request.prompts[i] = prompt
+        return request
+
+    return pre_process_func
+
+
+def _normalize_wan21_flf2v_images(
+    multi_modal_data: dict[str, Any],
+) -> tuple[PIL.Image.Image, PIL.Image.Image]:
+    raw_image = multi_modal_data.get("image")
+    raw_last_image = multi_modal_data.get("last_image")
+
+    if isinstance(raw_image, list):
+        if raw_last_image is not None:
+            raise ValueError(
+                "Wan2.1 FLF2V accepts either image as [first, last] or last_image, "
+                "not both."
+            )
+        if len(raw_image) != 2:
+            raise ValueError(
+                "Wan2.1 FLF2V image list must contain exactly two images: "
+                "[first, last]."
+            )
+        first_raw_image = raw_image[0]
+        last_raw_image = raw_image[1]
+    else:
+        first_raw_image = raw_image
+        last_raw_image = raw_last_image
+
+    if first_raw_image is None or last_raw_image is None:
+        raise ValueError("Wan2.1 FLF2V requires both first and last images.")
+
+    for raw in (first_raw_image, last_raw_image):
+        if not isinstance(raw, (str, PIL.Image.Image)):
+            raise TypeError(
+                f"Unsupported image format {raw.__class__}. "
+                'Please use `"multi_modal_data": {"image": ..., "last_image": ...}` '
+                'or `"multi_modal_data": {"image": [first, last]}` with paths or '
+                "PIL.Image.Image values."
+            )
+
+    first_image = _load_pil_image(first_raw_image)
+    last_image = _load_pil_image(last_raw_image)
+    multi_modal_data["image"] = first_image
+    multi_modal_data["last_image"] = last_image
+    return first_image, last_image
+
+
+def _prepare_wan21_flf2v_image_embeds(
+    image_embeds: torch.Tensor,
+    prompt_batch_size: int,
+) -> torch.Tensor:
+    if image_embeds.ndim != 3:
+        raise ValueError(
+            "Wan2.1 FLF2V image_embeds must be a 3D tensor with shape [2, S, D] "
+            "or [2B, S, D]."
+        )
+
+    image_batch_size = image_embeds.shape[0]
+    expanded_image_batch_size = prompt_batch_size * 2
+    if image_batch_size == 2:
+        return image_embeds.repeat(prompt_batch_size, 1, 1)
+    if image_batch_size == expanded_image_batch_size:
+        return image_embeds
+
+    raise ValueError(
+        "Wan2.1 FLF2V image_embeds must have shape [2, S, D] for first/last "
+        f"images or [2B, S, D] for an expanded prompt batch; got first dimension "
+        f"{image_batch_size} for prompt batch {prompt_batch_size}. Pre-merged "
+        "[B, 2S, D] embeddings are not supported."
+    )
+
+
+def get_wan21_flf2v_pre_process_func(od_config: OmniDiffusionConfig):
+    def pre_process_func(request: OmniDiffusionRequest) -> OmniDiffusionRequest:
+        for i, prompt in enumerate(request.prompts):
+            prompt = _ensure_prompt_dict(prompt)
+            multi_modal_data = prompt.setdefault("multi_modal_data", {})
+            first_image, last_image = _normalize_wan21_flf2v_images(multi_modal_data)
+            if request.sampling_params.height is None or request.sampling_params.width is None:
+                height, width = _resize_to_area(
+                    first_image,
+                    _default_i2v_area(od_config.model),
+                )
+                if request.sampling_params.height is None:
+                    request.sampling_params.height = height
+                if request.sampling_params.width is None:
+                    request.sampling_params.width = width
+            size = (
+                cast(int, request.sampling_params.width),
+                cast(int, request.sampling_params.height),
+            )
+            multi_modal_data["image"] = first_image.resize(
+                size,
+                PIL.Image.Resampling.LANCZOS,
+            )
+            multi_modal_data["last_image"] = last_image.resize(
+                size,
+                PIL.Image.Resampling.LANCZOS,
+            )
             request.prompts[i] = prompt
         return request
 
@@ -467,6 +592,7 @@ def get_wan21_vace_pre_process_func(od_config: OmniDiffusionConfig):
 class Wan21PipelineBase(
     nn.Module,
     SupportsComponentDiscovery,
+    PipelineParallelMixin,
     CFGParallelMixin,
     ProgressBarMixin,
     DiffusionPipelineProfilerMixin,
@@ -532,7 +658,11 @@ class Wan21PipelineBase(
         self.transformer_config = self.transformer.config
 
         self._sample_solver = "unipc"
-        self._flow_shift = od_config.flow_shift if od_config.flow_shift is not None else 5.0
+        self._flow_shift = (
+            od_config.flow_shift
+            if od_config.flow_shift is not None
+            else resolve_wan21_default_flow_shift(self.model)
+        )
         self.scheduler = build_wan21_scheduler(self._flow_shift)
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal
         self.vae_scale_factor_spatial = self.vae.config.scale_factor_spatial
@@ -691,12 +821,14 @@ class Wan21PipelineBase(
         current_model: nn.Module | None = None,
         cache_name: str = "cond",
         **kwargs: Any,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | IntermediateTensors:
         current_model = current_model or self.transformer
         cache_context = getattr(current_model, "cache_context", None)
         context = cache_context(cache_name) if callable(cache_context) else nullcontext()
         with context:
             result = current_model(**kwargs)
+        if isinstance(result, IntermediateTensors):
+            return result
         return result[0] if isinstance(result, tuple) else result.sample
 
     def diffuse(
@@ -709,47 +841,51 @@ class Wan21PipelineBase(
         dtype: torch.dtype,
         attention_kwargs: dict[str, Any] | None,
         extra_model_kwargs: dict[str, Any] | None = None,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | AsyncLatents:
         attention_kwargs = attention_kwargs or {}
         extra_model_kwargs = extra_model_kwargs or {}
-        with self.progress_bar(total=len(timesteps)) as pbar:
-            for t in timesteps:
-                self._current_timestep = t
-                latent_model_input = latents.to(dtype)
-                timestep = t.expand(latents.shape[0])
-                do_true_cfg = guidance_scale > 1.0 and negative_prompt_embeds is not None
-                positive_kwargs = {
-                    "hidden_states": latent_model_input,
-                    "timestep": timestep,
-                    "encoder_hidden_states": prompt_embeds,
-                    "attention_kwargs": attention_kwargs,
-                    "return_dict": False,
-                    "current_model": self.transformer,
-                    "cache_name": "cond",
-                    **extra_model_kwargs,
-                }
-                negative_kwargs = None
-                if do_true_cfg:
-                    negative_kwargs = {
+        try:
+            with self.progress_bar(total=len(timesteps)) as pbar:
+                for step_idx, t in enumerate(timesteps):
+                    self._current_timestep = t
+                    set_forward_context_denoise_step_idx(step_idx)
+                    latent_model_input = latents.to(dtype)
+                    timestep = t.expand(latents.shape[0])
+                    do_true_cfg = guidance_scale > 1.0 and negative_prompt_embeds is not None
+                    positive_kwargs = {
                         "hidden_states": latent_model_input,
                         "timestep": timestep,
-                        "encoder_hidden_states": negative_prompt_embeds,
+                        "encoder_hidden_states": prompt_embeds,
                         "attention_kwargs": attention_kwargs,
                         "return_dict": False,
                         "current_model": self.transformer,
-                        "cache_name": "uncond",
+                        "cache_name": "cond",
                         **extra_model_kwargs,
                     }
-                noise_pred = self.predict_noise_maybe_with_cfg(
-                    do_true_cfg=do_true_cfg,
-                    true_cfg_scale=guidance_scale,
-                    positive_kwargs=positive_kwargs,
-                    negative_kwargs=negative_kwargs,
-                    cfg_normalize=False,
-                )
-                latents = self.scheduler_step_maybe_with_cfg(noise_pred, t, latents, do_true_cfg)
-                pbar.update()
-        return latents
+                    negative_kwargs = None
+                    if do_true_cfg:
+                        negative_kwargs = {
+                            "hidden_states": latent_model_input,
+                            "timestep": timestep,
+                            "encoder_hidden_states": negative_prompt_embeds,
+                            "attention_kwargs": attention_kwargs,
+                            "return_dict": False,
+                            "current_model": self.transformer,
+                            "cache_name": "uncond",
+                            **extra_model_kwargs,
+                        }
+                    noise_pred = self.predict_noise_maybe_with_cfg(
+                        do_true_cfg=do_true_cfg,
+                        true_cfg_scale=guidance_scale,
+                        positive_kwargs=positive_kwargs,
+                        negative_kwargs=negative_kwargs,
+                        cfg_normalize=False,
+                    )
+                    latents = self.scheduler_step_maybe_with_cfg(noise_pred, t, latents, do_true_cfg)
+                    pbar.update()
+            return latents
+        finally:
+            set_forward_context_denoise_step_idx(None)
 
     def _decode_latents(
         self,
@@ -982,7 +1118,7 @@ class Wan21I2VPipelineBase(Wan21PipelineBase, SupportImageInput):
 
     def encode_image(
         self,
-        image: PIL.Image.Image | torch.Tensor,
+        image: PIL.Image.Image | list[PIL.Image.Image] | torch.Tensor,
         device: torch.device | None = None,
     ) -> torch.Tensor:
         device = device or self.device
@@ -1162,57 +1298,266 @@ class Wan21I2VPipelineBase(Wan21PipelineBase, SupportImageInput):
         dtype: torch.dtype,
         attention_kwargs: dict[str, Any] | None,
         extra_model_kwargs: dict[str, Any] | None = None,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | AsyncLatents:
         attention_kwargs = attention_kwargs or {}
         extra_model_kwargs = extra_model_kwargs or {}
         condition = extra_model_kwargs.pop("condition")
-        with self.progress_bar(total=len(timesteps)) as pbar:
-            for t in timesteps:
-                self._current_timestep = t
-                latent_model_input = torch.cat([latents, condition], dim=1).to(dtype)
-                timestep = t.expand(latents.shape[0])
-                do_true_cfg = guidance_scale > 1.0 and negative_prompt_embeds is not None
-                positive_kwargs = {
-                    "hidden_states": latent_model_input,
-                    "timestep": timestep,
-                    "encoder_hidden_states": prompt_embeds,
-                    "attention_kwargs": attention_kwargs,
-                    "return_dict": False,
-                    "current_model": self.transformer,
-                    "cache_name": "cond",
-                    **extra_model_kwargs,
-                }
-                negative_kwargs = None
-                if do_true_cfg:
-                    negative_kwargs = {
+        try:
+            with self.progress_bar(total=len(timesteps)) as pbar:
+                for step_idx, t in enumerate(timesteps):
+                    self._current_timestep = t
+                    set_forward_context_denoise_step_idx(step_idx)
+                    latent_model_input = torch.cat([latents, condition], dim=1).to(dtype)
+                    timestep = t.expand(latents.shape[0])
+                    do_true_cfg = guidance_scale > 1.0 and negative_prompt_embeds is not None
+                    positive_kwargs = {
                         "hidden_states": latent_model_input,
                         "timestep": timestep,
-                        "encoder_hidden_states": negative_prompt_embeds,
+                        "encoder_hidden_states": prompt_embeds,
                         "attention_kwargs": attention_kwargs,
                         "return_dict": False,
                         "current_model": self.transformer,
-                        "cache_name": "uncond",
+                        "cache_name": "cond",
                         **extra_model_kwargs,
                     }
-                noise_pred = self.predict_noise_maybe_with_cfg(
-                    do_true_cfg=do_true_cfg,
-                    true_cfg_scale=guidance_scale,
-                    positive_kwargs=positive_kwargs,
-                    negative_kwargs=negative_kwargs,
-                    cfg_normalize=False,
+                    negative_kwargs = None
+                    if do_true_cfg:
+                        negative_kwargs = {
+                            "hidden_states": latent_model_input,
+                            "timestep": timestep,
+                            "encoder_hidden_states": negative_prompt_embeds,
+                            "attention_kwargs": attention_kwargs,
+                            "return_dict": False,
+                            "current_model": self.transformer,
+                            "cache_name": "uncond",
+                            **extra_model_kwargs,
+                        }
+                    noise_pred = self.predict_noise_maybe_with_cfg(
+                        do_true_cfg=do_true_cfg,
+                        true_cfg_scale=guidance_scale,
+                        positive_kwargs=positive_kwargs,
+                        negative_kwargs=negative_kwargs,
+                        cfg_normalize=False,
+                    )
+                    latents = self.scheduler_step_maybe_with_cfg(noise_pred, t, latents, do_true_cfg)
+                    pbar.update()
+            return latents
+        finally:
+            set_forward_context_denoise_step_idx(None)
+
+
+class Wan21FLF2VPipelineBase(Wan21I2VPipelineBase):
+    support_image_input = True
+
+    def prepare_i2v_latents(
+        self,
+        image: torch.Tensor,
+        batch_size: int,
+        height: int,
+        width: int,
+        num_frames: int,
+        dtype: torch.dtype | None,
+        device: torch.device | None,
+        generator: torch.Generator | list[torch.Generator] | None,
+        latents: torch.Tensor | None = None,
+        last_image: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if last_image is None:
+            raise ValueError("Wan2.1 FLF2V requires a last image for conditioning.")
+        if num_frames < 2:
+            raise ValueError("Wan2.1 FLF2V requires at least two frames.")
+
+        num_latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1
+        latent_height = height // self.vae_scale_factor_spatial
+        latent_width = width // self.vae_scale_factor_spatial
+        shape = (
+            batch_size,
+            self.vae.config.z_dim,
+            num_latent_frames,
+            latent_height,
+            latent_width,
+        )
+        if latents is None:
+            latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+        else:
+            latents = latents.to(device=device, dtype=dtype)
+
+        image = image.unsqueeze(2)
+        last_image = last_image.unsqueeze(2)
+        video_condition = torch.cat(
+            [
+                image,
+                image.new_zeros(
+                    image.shape[0],
+                    image.shape[1],
+                    num_frames - 2,
+                    height,
+                    width,
+                ),
+                last_image,
+            ],
+            dim=2,
+        )
+        video_condition = video_condition.to(device=device, dtype=self.vae.dtype)
+        latent_condition = retrieve_latents(self.vae.encode(video_condition), sample_mode="argmax")
+        latent_condition = latent_condition.repeat(batch_size, 1, 1, 1, 1)
+        latent_condition = latent_condition.to(dtype)
+        latents_mean = (
+            torch.tensor(self.vae.config.latents_mean)
+            .view(1, self.vae.config.z_dim, 1, 1, 1)
+            .to(latent_condition.device, latent_condition.dtype)
+        )
+        latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(
+            1,
+            self.vae.config.z_dim,
+            1,
+            1,
+            1,
+        ).to(latent_condition.device, latent_condition.dtype)
+        latent_condition = (latent_condition - latents_mean) * latents_std
+
+        mask_lat_size = torch.ones(batch_size, 1, num_frames, latent_height, latent_width)
+        mask_lat_size[:, :, 1 : num_frames - 1] = 0
+        first_frame_mask = torch.repeat_interleave(
+            mask_lat_size[:, :, 0:1],
+            dim=2,
+            repeats=self.vae_scale_factor_temporal,
+        )
+        mask_lat_size = torch.concat([first_frame_mask, mask_lat_size[:, :, 1:, :]], dim=2)
+        mask_lat_size = mask_lat_size.view(
+            batch_size,
+            -1,
+            self.vae_scale_factor_temporal,
+            latent_height,
+            latent_width,
+        )
+        mask_lat_size = mask_lat_size.transpose(1, 2).to(latent_condition.device)
+        return latents, torch.concat([mask_lat_size, latent_condition], dim=1)
+
+    @torch.inference_mode()
+    def forward(
+        self,
+        req: OmniDiffusionRequest,
+        prompt: str | None = None,
+        negative_prompt: str | None = None,
+        height: int = 480,
+        width: int = 832,
+        num_inference_steps: int = 40,
+        guidance_scale: float = 5.0,
+        frame_num: int = 81,
+        output_type: str | None = "np",
+        generator: torch.Generator | list[torch.Generator] | None = None,
+        prompt_embeds: torch.Tensor | None = None,
+        negative_prompt_embeds: torch.Tensor | None = None,
+        image_embeds: torch.Tensor | None = None,
+        attention_kwargs: dict | None = None,
+        **kwargs,
+    ) -> DiffusionOutput:
+        (
+            prompt_embeds,
+            negative_prompt_embeds,
+            height,
+            width,
+            num_frames,
+            timesteps,
+            generator,
+            dtype,
+        ) = self._prepare_common_forward(
+            req,
+            prompt,
+            negative_prompt,
+            height,
+            width,
+            num_inference_steps,
+            guidance_scale,
+            frame_num,
+            generator,
+            prompt_embeds,
+            negative_prompt_embeds,
+        )
+        multi_modal_data = _multi_modal_data(req.prompts[0]) or {}
+        raw_image = multi_modal_data.get("image")
+        raw_last_image = multi_modal_data.get("last_image")
+        if isinstance(raw_image, list):
+            if raw_last_image is not None:
+                raise ValueError(
+                    "Wan2.1 FLF2V accepts either image as [first, last] or last_image, "
+                    "not both."
                 )
-                latents = self.scheduler_step_maybe_with_cfg(noise_pred, t, latents, do_true_cfg)
-                pbar.update()
-        return latents
+            if len(raw_image) != 2:
+                raise ValueError(
+                    "Wan2.1 FLF2V image list must contain exactly two images: "
+                    "[first, last]."
+                )
+            raw_image, raw_last_image = raw_image
+        if raw_image is None or raw_last_image is None:
+            raise ValueError("Wan2.1 FLF2V requires both first and last images.")
+
+        image = cast(PIL.Image.Image | torch.Tensor, raw_image)
+        last_image = cast(PIL.Image.Image | torch.Tensor, raw_last_image)
+        if image_embeds is None:
+            image_embeds = self.encode_image([image, last_image], self.device)
+        image_embeds = _prepare_wan21_flf2v_image_embeds(
+            image_embeds,
+            prompt_embeds.shape[0],
+        ).to(dtype)
+
+        video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
+        if isinstance(image, PIL.Image.Image):
+            image = image.resize((width, height), PIL.Image.Resampling.LANCZOS)
+            image_tensor = video_processor.preprocess(image, height=height, width=width)
+        else:
+            image_tensor = image
+        image_tensor = image_tensor.to(self.device, dtype=torch.float32)
+
+        if isinstance(last_image, PIL.Image.Image):
+            last_image = last_image.resize((width, height), PIL.Image.Resampling.LANCZOS)
+            last_image_tensor = video_processor.preprocess(
+                last_image,
+                height=height,
+                width=width,
+            )
+        else:
+            last_image_tensor = last_image
+        last_image_tensor = last_image_tensor.to(self.device, dtype=torch.float32)
+
+        latents, condition = self.prepare_i2v_latents(
+            image=image_tensor,
+            batch_size=prompt_embeds.shape[0],
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            dtype=torch.float32,
+            device=self.device,
+            generator=generator,
+            latents=req.sampling_params.latents,
+            last_image=last_image_tensor,
+        )
+        latents = self.diffuse(
+            latents=latents,
+            timesteps=timesteps,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            guidance_scale=cast(float, self._guidance_scale),
+            dtype=dtype,
+            attention_kwargs=attention_kwargs,
+            extra_model_kwargs={
+                "encoder_hidden_states_image": image_embeds,
+                "condition": condition,
+            },
+        )
+        if current_omni_platform.is_available():
+            current_omni_platform.empty_cache()
+        self._current_timestep = None
+        output = self._decode_latents(latents, output_type)
+        return DiffusionOutput(
+            output=output,
+            stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None,
+        )
 
 
 class Wan21VACEPipelineBase(Wan21PipelineBase, SupportImageInput):
     support_image_input = True
-
-    def __init__(self, *, od_config: OmniDiffusionConfig, prefix: str = ""):
-        if od_config.flow_shift is None:
-            od_config = replace(od_config, flow_shift=3.0)
-        super().__init__(od_config=od_config, prefix=prefix)
 
     def _create_transformer(self, config: dict[str, Any]) -> Wan21VACETransformer3DModel:
         quant_config = getattr(self.od_config, "quantization_config", None)

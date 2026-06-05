@@ -94,6 +94,7 @@ class OmniOpenAIServingVideo:
         reference_id: str,
         *,
         reference_image: ReferenceImage | None = None,
+        last_reference_image: ReferenceImage | None = None,
     ) -> VideoGenerationArtifacts:
         """Run the generation pipeline and extract video/audio/profiler outputs."""
         prompt: OmniTextPrompt = OmniTextPrompt(prompt=request.prompt, modalities=["video"])
@@ -103,13 +104,20 @@ class OmniOpenAIServingVideo:
         gen_params = self._resolve_default_sampling_params()
 
         input_image = None if reference_image is None else reference_image.data
+        last_input_image = None if last_reference_image is None else last_reference_image.data
         vp = request.resolve_video_params()
         if input_image is not None and vp.width is not None and vp.height is not None:
             target_size = (vp.width, vp.height)
             if input_image.size != target_size:
                 input_image = input_image.resize(target_size, Image.Resampling.LANCZOS)
+        if last_input_image is not None and vp.width is not None and vp.height is not None:
+            target_size = (vp.width, vp.height)
+            if last_input_image.size != target_size:
+                last_input_image = last_input_image.resize(target_size, Image.Resampling.LANCZOS)
         if input_image is not None:
             prompt["multi_modal_data"] = {"image": input_image}
+        if last_input_image is not None:
+            prompt.setdefault("multi_modal_data", {})["last_image"] = last_input_image
         if vp.width is not None and vp.height is not None:
             gen_params.width = vp.width
             gen_params.height = vp.height
@@ -190,8 +198,14 @@ class OmniOpenAIServingVideo:
         reference_id: str,
         *,
         reference_image: ReferenceImage | None = None,
+        last_reference_image: ReferenceImage | None = None,
     ) -> VideoGenerationResponse:
-        artifacts = await self._run_and_extract(request, reference_id, reference_image=reference_image)
+        artifacts = await self._run_and_extract(
+            request,
+            reference_id,
+            reference_image=reference_image,
+            last_reference_image=last_reference_image,
+        )
 
         video_codec_options = {"preset": "ultrafast", "threads": "0"}
         if request.extra_params is not None and isinstance(request.extra_params, dict):
@@ -230,9 +244,15 @@ class OmniOpenAIServingVideo:
         reference_id: str,
         *,
         reference_image: ReferenceImage | None = None,
+        last_reference_image: ReferenceImage | None = None,
     ) -> tuple[bytes, dict[str, float], float]:
         """Generate a video and return raw MP4 bytes, bypassing base64 encoding."""
-        artifacts = await self._run_and_extract(request, reference_id, reference_image=reference_image)
+        artifacts = await self._run_and_extract(
+            request,
+            reference_id,
+            reference_image=reference_image,
+            last_reference_image=last_reference_image,
+        )
         if len(artifacts.videos) > 1:
             logger.warning(
                 "Video request %s generated %d outputs; returning only the first.",

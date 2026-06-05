@@ -99,6 +99,13 @@ class VideoGenerationRequest(BaseModel):
         default=None,
         description="Optional JSON-safe image reference that guides generation. Provide either image_url or file_id.",
     )
+    last_image_reference: ImageReference | None = Field(
+        default=None,
+        description=(
+            "Optional JSON-safe last-frame image reference that guides generation. "
+            "Provide either image_url or file_id."
+        ),
+    )
 
     # Video params block for extensibility
     video_params: VideoParams | None = Field(default=None, description="Optional video-specific parameters")
@@ -130,17 +137,17 @@ class VideoGenerationRequest(BaseModel):
         default=None,
         ge=0.0,
         le=20.0,
-        description="High-noise CFG scale for video models (Wan2.2)",
+        description="High-noise CFG scale for video models that use staged denoising.",
     )
     boundary_ratio: float | None = Field(
         default=None,
         ge=0.0,
         le=1.0,
-        description="Boundary split ratio for low/high DiT (Wan2.2)",
+        description="Boundary split ratio for low/high DiT video models.",
     )
     flow_shift: float | None = Field(
         default=None,
-        description="Scheduler flow_shift for video models (Wan2.2)",
+        description="Scheduler flow_shift override for supported video models.",
     )
     true_cfg_scale: float | None = Field(
         default=None,

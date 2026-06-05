@@ -4,8 +4,6 @@
 """
 GPU acceptance coverage for Wan2.1-VACE native transformer features.
 
-Uses the 1.3B variant for faster CI testing.
-
 Coverage:
   Single GPU:
     - Cache-DiT + layerwise CPU offload
@@ -13,6 +11,7 @@ Coverage:
     - Ulysses-SP = 2
     - Ring = 2
     - CFG-Parallel = 2
+    - Pipeline-Parallel = 2
     - TP = 2 + VAE-Patch-Parallel = 2
     - HSDP = 2 + VAE-Patch-Parallel = 2
 """
@@ -20,104 +19,72 @@ Coverage:
 import pytest
 
 from tests.helpers.mark import hardware_marks
+from tests.helpers.media import generate_synthetic_image
 from tests.helpers.runtime import OmniServer, OmniServerParams, OpenAIClientHandler
 
 pytestmark = [pytest.mark.diffusion, pytest.mark.full_model]
 
-MODEL = "Wan-AI/Wan2.1-VACE-1.3B-diffusers"
+WAN21_VACE_MODELS = [
+    ("Wan-AI/Wan2.1-VACE-1.3B-diffusers", "vace_13b"),
+    ("Wan-AI/Wan2.1-VACE-14B-diffusers", "vace_14b"),
+]
 PROMPT = "A cat walking slowly across a sunlit garden path"
 
 SINGLE_CARD_FEATURE_MARKS = hardware_marks(res={"cuda": "H100"})
 PARALLEL_FEATURE_MARKS = hardware_marks(res={"cuda": "H100"}, num_cards=2)
 
+FEATURE_CONFIGS = [
+    (
+        "cache_dit_layerwise_offload",
+        ["--cache-backend", "cache_dit", "--enable-layerwise-offload"],
+        SINGLE_CARD_FEATURE_MARKS,
+    ),
+    ("ulysses_sp", ["--usp", "2"], PARALLEL_FEATURE_MARKS),
+    ("ring", ["--ring", "2"], PARALLEL_FEATURE_MARKS),
+    ("cfg_parallel", ["--cfg-parallel-size", "2"], PARALLEL_FEATURE_MARKS),
+    (
+        "tensor_parallel_vae_patch",
+        [
+            "--tensor-parallel-size",
+            "2",
+            "--vae-patch-parallel-size",
+            "2",
+            "--vae-use-tiling",
+        ],
+        PARALLEL_FEATURE_MARKS,
+    ),
+    (
+        "hsdp_vae_patch",
+        [
+            "--use-hsdp",
+            "--hsdp-shard-size",
+            "2",
+            "--vae-patch-parallel-size",
+            "2",
+            "--vae-use-tiling",
+        ],
+        PARALLEL_FEATURE_MARKS,
+    ),
+    ("pipeline_parallel", ["--pipeline-parallel-size", "2"], PARALLEL_FEATURE_MARKS),
+]
+
 
 def _get_vace_feature_cases():
-    return [
-        # Single GPU: Cache-DiT + layerwise CPU offload
-        pytest.param(
-            OmniServerParams(
-                model=MODEL,
-                server_args=[
-                    "--cache-backend",
-                    "cache_dit",
-                    "--enable-layerwise-offload",
-                    "--vae-use-tiling",
-                ],
-            ),
-            id="single_card_001",
-            marks=SINGLE_CARD_FEATURE_MARKS,
-        ),
-        # 2 GPUs: Ulysses-SP = 2
-        pytest.param(
-            OmniServerParams(
-                model=MODEL,
-                server_args=[
-                    "--usp",
-                    "2",
-                    "--vae-use-tiling",
-                ],
-            ),
-            id="parallel_001",
-            marks=PARALLEL_FEATURE_MARKS,
-        ),
-        # 2 GPUs: Ring = 2
-        pytest.param(
-            OmniServerParams(
-                model=MODEL,
-                server_args=[
-                    "--ring",
-                    "2",
-                    "--vae-use-tiling",
-                ],
-            ),
-            id="parallel_002",
-            marks=PARALLEL_FEATURE_MARKS,
-        ),
-        # 2 GPUs: CFG-Parallel = 2
-        pytest.param(
-            OmniServerParams(
-                model=MODEL,
-                server_args=[
-                    "--cfg-parallel-size",
-                    "2",
-                    "--vae-use-tiling",
-                ],
-            ),
-            id="parallel_003",
-            marks=PARALLEL_FEATURE_MARKS,
-        ),
-        # 2 GPUs: TP = 2 + VAE-Patch-Parallel = 2
-        pytest.param(
-            OmniServerParams(
-                model=MODEL,
-                server_args=[
-                    "--tensor-parallel-size",
-                    "2",
-                    "--vae-patch-parallel-size",
-                    "2",
-                    "--vae-use-tiling",
-                ],
-            ),
-            id="parallel_004",
-            marks=PARALLEL_FEATURE_MARKS,
-        ),
-        # 2 GPUs: HSDP = 2 + VAE-Patch-Parallel = 2
-        pytest.param(
-            OmniServerParams(
-                model=MODEL,
-                server_args=[
-                    "--use-hsdp",
-                    "--hsdp-shard-size",
-                    "2",
-                    "--vae-patch-parallel-size",
-                    "2",
-                    "--vae-use-tiling",
-                ],
-            ),
-            id="parallel_005",
-            marks=PARALLEL_FEATURE_MARKS,
-        ),
-    ]
+    cases = []
+    for model_path, model_key in WAN21_VACE_MODELS:
+        for feature_id, server_args, marks in FEATURE_CONFIGS:
+            cases.append(
+                pytest.param(
+                    OmniServerParams(model=model_path, server_args=server_args),
+                    id=f"{model_key}_{feature_id}",
+                    marks=marks,
+                )
+            )
+    return cases
+
+
+def _synthetic_image_reference() -> str:
+    return f"data:image/jpeg;base64,{generate_synthetic_image(512, 512)['base64']}"
 
 
 @pytest.mark.parametrize(
@@ -127,9 +94,9 @@ def _get_vace_feature_cases():
 )
 def test_wan_2_1_vace(omni_server: OmniServer, openai_client: OpenAIClientHandler):
     """Test VACE T2V generation with all supported diffusion acceleration features."""
-    openai_client.send_video_diffusion_request(
+    result = openai_client.send_video_diffusion_request(
         {
-            "model": MODEL,
+            "model": omni_server.model,
             "form_data": {
                 "prompt": PROMPT,
                 "height": 480,
@@ -141,4 +108,46 @@ def test_wan_2_1_vace(omni_server: OmniServer, openai_client: OpenAIClientHandle
                 "seed": 42,
             },
         }
-    )
+    )[0]
+    assert result.videos is not None
+    assert len(result.videos) == 1
+    assert len(result.videos[0]) > 1024
+
+
+@pytest.mark.parametrize(
+    "omni_server",
+    [
+        pytest.param(
+            OmniServerParams(
+                model="Wan-AI/Wan2.1-VACE-1.3B-diffusers",
+                server_args=["--enforce-eager"],
+            ),
+            id="vace_13b_reference_image",
+            marks=SINGLE_CARD_FEATURE_MARKS,
+        )
+    ],
+    indirect=True,
+)
+def test_wan_2_1_vace_reference_image(
+    omni_server: OmniServer,
+    openai_client: OpenAIClientHandler,
+):
+    result = openai_client.send_video_diffusion_request(
+        {
+            "model": omni_server.model,
+            "form_data": {
+                "prompt": PROMPT,
+                "height": 480,
+                "width": 320,
+                "num_frames": 5,
+                "fps": 8,
+                "num_inference_steps": 2,
+                "guidance_scale": 5.0,
+                "seed": 42,
+            },
+            "image_reference": _synthetic_image_reference(),
+        }
+    )[0]
+    assert result.videos is not None
+    assert len(result.videos) == 1
+    assert len(result.videos[0]) > 1024

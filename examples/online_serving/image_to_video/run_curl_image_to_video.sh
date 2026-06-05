@@ -5,6 +5,7 @@ set -euo pipefail
 
 MODEL="${MODEL:-Wan-AI/Wan2.2-I2V-A14B-Diffusers}"
 INPUT_IMAGE="${INPUT_IMAGE:-../../offline_inference/image_to_video/qwen-bear.png}"
+LAST_INPUT_IMAGE="${LAST_INPUT_IMAGE:-}"
 BASE_URL="${BASE_URL:-http://localhost:8099}"
 PROMPT="${PROMPT:-A bear playing with yarn, smooth motion}"
 NEGATIVE_PROMPT="${NEGATIVE_PROMPT:-}"
@@ -23,7 +24,15 @@ fi
 
 if [ "${IS_WAN21}" = "1" ]; then
   GUIDANCE_SCALE="${GUIDANCE_SCALE:-5.0}"
-  FLOW_SHIFT="${FLOW_SHIFT:-5.0}"
+  if [ -z "${FLOW_SHIFT:-}" ]; then
+    if [[ "${MODEL}" == *"FLF2V"* || "${MODEL}" == *"flf2v"* ]]; then
+      FLOW_SHIFT="16.0"
+    elif [[ ( "${MODEL}" == *"I2V"* || "${MODEL}" == *"i2v"* ) && ( "${MODEL}" == *"720P"* || "${MODEL}" == *"720p"* ) ]]; then
+      FLOW_SHIFT="5.0"
+    else
+      FLOW_SHIFT="3.0"
+    fi
+  fi
 else
   GUIDANCE_SCALE="${GUIDANCE_SCALE:-1.0}"
   GUIDANCE_SCALE_2="${GUIDANCE_SCALE_2:-1.0}"
@@ -43,6 +52,10 @@ if [ ! -f "$INPUT_IMAGE" ]; then
     echo "Input image not found: $INPUT_IMAGE"
     exit 1
 fi
+if [ -n "${LAST_INPUT_IMAGE}" ] && [ ! -f "${LAST_INPUT_IMAGE}" ]; then
+    echo "Last input image not found: ${LAST_INPUT_IMAGE}"
+    exit 1
+fi
 
 create_cmd=(
   curl -sS -X POST "${BASE_URL}/v1/videos"
@@ -58,6 +71,10 @@ create_cmd=(
   -F "flow_shift=${FLOW_SHIFT}"
   -F "seed=${SEED}"
 )
+
+if [ -n "${LAST_INPUT_IMAGE}" ]; then
+  create_cmd+=(-F "last_input_reference=@${LAST_INPUT_IMAGE}")
+fi
 
 if [ "${IS_WAN21}" != "1" ]; then
   create_cmd+=(

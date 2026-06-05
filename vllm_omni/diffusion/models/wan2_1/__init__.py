@@ -7,6 +7,7 @@ from importlib import import_module
 from typing import Any
 
 from .model_index import (
+    WAN21_FLF2V_PIPELINE,
     WAN21_I2V_PIPELINE,
     WAN21_T2V_PIPELINE,
     WAN21_VACE_PIPELINE,
@@ -32,6 +33,15 @@ _LAZY_EXPORTS = {
         "pipeline_wan2_1_i2v",
         "get_wan21_i2v_pre_process_func",
     ),
+    "Wan21FLF2VPipeline": ("pipeline_wan2_1_flf2v", "Wan21FLF2VPipeline"),
+    "get_wan21_flf2v_post_process_func": (
+        "pipeline_wan2_1_flf2v",
+        "get_wan21_flf2v_post_process_func",
+    ),
+    "get_wan21_flf2v_pre_process_func": (
+        "pipeline_wan2_1_flf2v",
+        "get_wan21_flf2v_pre_process_func",
+    ),
     "Wan21VACEPipeline": ("pipeline_wan2_1_vace", "Wan21VACEPipeline"),
     "get_wan21_vace_post_process_func": (
         "pipeline_wan2_1_vace",
@@ -51,6 +61,7 @@ _LAZY_EXPORTS = {
 __all__ = [
     "WAN21_T2V_PIPELINE",
     "WAN21_I2V_PIPELINE",
+    "WAN21_FLF2V_PIPELINE",
     "WAN21_VACE_PIPELINE",
     "resolve_wan21_pipeline_class_name",
     "Wan21Pipeline",
@@ -59,6 +70,9 @@ __all__ = [
     "Wan21I2VPipeline",
     "get_wan21_i2v_post_process_func",
     "get_wan21_i2v_pre_process_func",
+    "Wan21FLF2VPipeline",
+    "get_wan21_flf2v_post_process_func",
+    "get_wan21_flf2v_pre_process_func",
     "Wan21VACEPipeline",
     "get_wan21_vace_post_process_func",
     "get_wan21_vace_pre_process_func",

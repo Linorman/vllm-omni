@@ -138,6 +138,8 @@ class PipelineParallelMixin:
 
     def _wrapped_vae_decode(self) -> None:
         vae, orig_decode = self.vae, self.vae.decode
+        if getattr(orig_decode, "_vllm_omni_pp_wrapped", False):
+            return
 
         @wraps(orig_decode)
         def wrapped_decode(z: torch.Tensor, *args: Any, **kwargs: Any):
@@ -151,6 +153,7 @@ class PipelineParallelMixin:
                 return orig_decode(z, *args, **kwargs)
             return (None,)  # decoder returns a tuple
 
+        wrapped_decode._vllm_omni_pp_wrapped = True
         self.vae.decode = wrapped_decode
 
     @property

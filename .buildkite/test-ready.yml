@@ -11,6 +11,7 @@ steps:
       - label: "Simple · Diffusion & Model Executor Test"
         commands:
           - "timeout 20m pytest -sv tests/diffusion tests/model_executor -m 'core_model and cpu' --cov=vllm_omni --cov-report=term-missing:skip-covered --cov-report=xml"
+          - "timeout 20m python -m pytest tests/diffusion/models/wan2_1 -q"
         agents:
           queue: "gpu_1_queue"
         plugins:

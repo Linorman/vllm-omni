@@ -11,7 +11,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
+from vllm.sequence import IntermediateTensors
 
+from vllm_omni.diffusion.distributed.parallel_state import (
+    is_pipeline_first_stage,
+    is_pipeline_last_stage,
+)
 from vllm_omni.diffusion.distributed.sp_plan import SequenceParallelInput
 from vllm_omni.diffusion.distributed.sp_sharding import sp_shard
 from vllm_omni.diffusion.forward_context import get_forward_context
@@ -189,11 +194,12 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
         encoder_hidden_states_image: torch.Tensor | None = None,
         return_dict: bool = True,
         attention_kwargs: dict[str, Any] | None = None,
+        intermediate_tensors: IntermediateTensors | None = None,
         vace_context: torch.Tensor | None = None,
         vace_context_scale: float | list[float] = 1.0,
         control_hidden_states: torch.Tensor | None = None,
         control_hidden_states_scale: torch.Tensor | float | list[float] | None = None,
-    ) -> torch.Tensor | Transformer2DModelOutput:
+    ) -> torch.Tensor | Transformer2DModelOutput | IntermediateTensors:
         batch_size, _, num_frames, height, width = hidden_states.shape
         p_t, p_h, p_w = self.config.patch_size
         post_patch_num_frames = num_frames // p_t
@@ -211,9 +217,14 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
             self._cached_rope_emb = rotary_emb
             self._cached_rope_resolution = current_rope_resolution
 
-        # Patch embedding and flatten to sequence
-        hidden_states = self.patch_embedding(hidden_states)
-        hidden_states = hidden_states.flatten(2).transpose(1, 2)
+        if is_pipeline_first_stage():
+            # Patch embedding and flatten to sequence.
+            hidden_states = self.patch_embedding(hidden_states)
+            hidden_states = hidden_states.flatten(2).transpose(1, 2)
+        else:
+            if intermediate_tensors is None:
+                raise RuntimeError("intermediate_tensors must be provided for non-first PP stages")
+            hidden_states = intermediate_tensors["hidden_states"]
 
         if timestep.ndim == 2:
             ts_seq_len = timestep.shape[1]
@@ -234,8 +245,9 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
         if control_hidden_states_scale is not None:
             vace_context_scale = control_hidden_states_scale
 
-        # Shard hidden_states via _sp_plan hook (before VACE, not at blocks.0)
-        hidden_states = self._sp_shard_point(hidden_states)
+        if is_pipeline_first_stage():
+            # Shard hidden_states via _sp_plan hook (before VACE, not at blocks.0).
+            hidden_states = self._sp_shard_point(hidden_states)
 
         # SP state and attention mask for padding
         hidden_states_mask = None
@@ -254,7 +266,7 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
 
         # VACE: embed context and run conditioning blocks
         vace_hints = None
-        if vace_context is not None:
+        if vace_context is not None and is_pipeline_first_stage():
             full_seq_len = hidden_states.shape[1] * sp_size
             control_hidden_states = self.embed_vace_context(vace_context.to(hidden_states.dtype), full_seq_len, sp_size)
             vace_hints = []
@@ -268,13 +280,26 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
                     hidden_states_mask,
                 )
                 vace_hints.append(conditioning_states)
+        elif vace_context is not None and intermediate_tensors is not None:
+            try:
+                vace_hints = [
+                    intermediate_tensors[f"vace_hint_{i}"]
+                    for i in range(len(self.vace_layers))
+                ]
+            except KeyError as exc:
+                raise RuntimeError(
+                    "vace_hints must be provided for non-first VACE PP stages"
+                ) from exc
 
         # Normalize scale to per-layer list
         if vace_hints is not None and isinstance(vace_context_scale, (int, float)):
             vace_context_scale = [vace_context_scale] * len(vace_hints)
 
         # Transformer blocks with VACE hint application
-        for i, block in enumerate(self.blocks):
+        for i, block in enumerate(
+            self.blocks[self.start_layer : self.end_layer],
+            start=self.start_layer,
+        ):
             hidden_states = block(
                 hidden_states,
                 encoder_hidden_states,
@@ -285,6 +310,12 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
             if vace_hints is not None and self.vace_layers_mapping is not None and i in self.vace_layers_mapping:
                 vace_idx = self.vace_layers_mapping[i]
                 hidden_states = hidden_states + vace_hints[vace_idx] * vace_context_scale[vace_idx]
+
+        if not is_pipeline_last_stage():
+            tensors = {"hidden_states": hidden_states}
+            if vace_hints is not None:
+                tensors.update({f"vace_hint_{i}": hint for i, hint in enumerate(vace_hints)})
+            return IntermediateTensors(tensors)
 
         # Output norm, projection & unpatchify
         shift, scale = self.output_scale_shift_prepare(temb)

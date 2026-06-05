@@ -2066,6 +2066,22 @@ class OpenAIClientHandler:
                 files["input_reference"] = (f"reference.{extension}", BytesIO(file_data), content_type)
             else:
                 normalized_form_data["image_reference"] = json.dumps({"image_url": image_reference})
+        last_image_reference = request_config.get("last_image_reference")
+        if last_image_reference:
+            if last_image_reference.startswith("data:image"):
+                header, encoded = last_image_reference.split(",", 1)
+                content_type = header.split(";")[0].removeprefix("data:")
+                extension = content_type.split("/")[-1]
+                file_data = base64.b64decode(encoded)
+                files["last_input_reference"] = (
+                    f"last_reference.{extension}",
+                    BytesIO(file_data),
+                    content_type,
+                )
+            else:
+                normalized_form_data["last_image_reference"] = json.dumps(
+                    {"image_url": last_image_reference}
+                )
 
         result = DiffusionResponse()
         create_url = self._build_url("/v1/videos")

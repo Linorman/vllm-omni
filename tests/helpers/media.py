@@ -445,21 +445,23 @@ def generate_synthetic_image(
     width: int,
     height: int,
     *,
+    color: tuple[int, int, int] | None = None,
     force_regenerate: bool = False,
     cache_dir: Path | str | None = None,
     seed: int | None = None,
 ) -> dict[str, Any]:
     """
-    Random colored squares on white background. Caches JPEG by ``width`` /
-    ``height`` unless ``force_regenerate`` is true. Cache root: ``cache_dir``
-    if given, else the default temp subdirectory.
+    Random colored squares on a configurable background. Caches JPEG by
+    ``width`` / ``height`` / ``color`` unless ``force_regenerate`` is true.
+    Cache root: ``cache_dir`` if given, else the default temp subdirectory.
     """
     if seed is not None:
         random.seed(seed)
 
     root = _resolve_synthetic_media_cache_dir(cache_dir)
     root.mkdir(parents=True, exist_ok=True)
-    cache_path = root / f"synth_image_w{width}_h{height}.jpg"
+    color_suffix = "" if color is None else "_c" + "-".join(str(component) for component in color)
+    cache_path = root / f"synth_image_w{width}_h{height}{color_suffix}.jpg"
 
     if not force_regenerate and cache_path.is_file():
         from PIL import Image as PILImage
@@ -475,7 +477,7 @@ def generate_synthetic_image(
 
     from PIL import ImageDraw
 
-    image = Image.new("RGB", (width, height), (255, 255, 255))
+    image = Image.new("RGB", (width, height), color or (255, 255, 255))
     draw = ImageDraw.Draw(image)
     num_squares = random.randint(3, 8)
     for _ in range(num_squares):

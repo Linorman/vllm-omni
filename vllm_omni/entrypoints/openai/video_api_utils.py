@@ -46,9 +46,10 @@ def _decode_base64_image(input_reference: str, *, source: str) -> Image.Image:
     raise InvalidInputReferenceError(f"Invalid {source}: image data is empty.")
 
 
-async def decode_image_url(image_url: str) -> Image.Image:
+async def decode_image_url(image_url: str, *, image_field: str = "image_reference") -> Image.Image:
+    image_url_field = f"{image_field}.image_url"
     if image_url.startswith("data:image"):
-        return _decode_base64_image(image_url, source="image_reference.image_url")
+        return _decode_base64_image(image_url, source=image_url_field)
 
     if image_url.startswith(("http://", "https://")):
         async with httpx.AsyncClient(timeout=60) as client:
@@ -56,30 +57,31 @@ async def decode_image_url(image_url: str) -> Image.Image:
                 response = await client.get(image_url)
                 response.raise_for_status()
             except httpx.HTTPError as exc:
-                raise InvalidInputReferenceError(
-                    "Invalid image_reference.image_url: failed to download image."
-                ) from exc
-        return _decode_image_bytes(response.content, source="image_reference.image_url")
+                raise InvalidInputReferenceError(f"Invalid {image_url_field}: failed to download image.") from exc
+        return _decode_image_bytes(response.content, source=image_url_field)
 
-    raise InvalidInputReferenceError("Invalid image_reference.image_url: must be an http(s) URL or data URL.")
+    raise InvalidInputReferenceError(f"Invalid {image_url_field}: must be an http(s) URL or data URL.")
 
 
 async def decode_input_reference(
     image_reference: ImageReference | None,
     input_reference_bytes: bytes | None,
+    *,
+    input_field: str = "input_reference",
+    image_field: str = "image_reference",
 ) -> Image.Image | None:
     """Decode image input from multipart bytes, base64/data URL, or image_reference."""
 
     if input_reference_bytes is not None and image_reference is not None:
-        raise InvalidInputReferenceError("Provide either input_reference or image_reference, not both.")
+        raise InvalidInputReferenceError(f"Provide either {input_field} or {image_field}, not both.")
 
     if isinstance(input_reference_bytes, bytes):
-        return _decode_image_bytes(input_reference_bytes, source="input_reference")
+        return _decode_image_bytes(input_reference_bytes, source=input_field)
 
     if isinstance(image_reference, UrlImageReference):
-        return await decode_image_url(image_reference.image_url)
+        return await decode_image_url(image_reference.image_url, image_field=image_field)
     elif isinstance(image_reference, FileImageReference):
-        raise InvalidInputReferenceError("Invalid image_reference: file_id is not supported yet.")
+        raise InvalidInputReferenceError(f"Invalid {image_field}: file_id is not supported yet.")
 
     return None
 

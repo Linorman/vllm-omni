@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=832, help="Video width.")
     parser.add_argument("--num-frames", type=int, default=81, help="Number of frames.")
     parser.add_argument("--num-inference-steps", type=int, default=30, help="Sampling steps.")
-    parser.add_argument("--flow-shift", type=float, default=5.0, help="Scheduler flow_shift.")
+    parser.add_argument("--flow-shift", type=float, default=None, help="Scheduler flow_shift.")
     parser.add_argument("--output", type=str, default="vace_output.mp4", help="Output video path.")
     parser.add_argument("--fps", type=int, default=16, help="Output video FPS.")
     parser.add_argument("--vae-use-tiling", action="store_true", default=True, help="Enable VAE tiling.")

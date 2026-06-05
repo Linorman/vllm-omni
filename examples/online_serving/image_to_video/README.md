@@ -16,6 +16,17 @@ Wan2.1 I2V can be served with the same endpoint:
 vllm serve Wan-AI/Wan2.1-I2V-14B-480P-Diffusers --omni --port 8091
 ```
 
+Wan2.1 FLF2V uses the same `/v1/videos` API with both first and last frame
+inputs:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 vllm serve Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers \
+  --omni \
+  --port 8099 \
+  --tensor-parallel-size 2 \
+  --vae-use-tiling
+```
+
 When serving Wan2.1 I2V, omit Wan2.2 MoE-only request fields such as
 `boundary_ratio` and `guidance_scale_2`.
 
@@ -145,6 +156,14 @@ bash run_curl_image_to_video.sh
 # Wan2.1 image-to-video generation
 MODEL=Wan-AI/Wan2.1-I2V-14B-480P-Diffusers bash run_curl_image_to_video.sh
 
+# Wan2.1 first-last-frame-to-video generation
+MODEL=Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers \
+INPUT_IMAGE=first.jpg \
+LAST_INPUT_IMAGE=last.jpg \
+FLOW_SHIFT=16.0 \
+SIZE=1280x720 \
+bash run_curl_image_to_video.sh
+
 # Wan Lightning/Distill checkpoints
 SAMPLE_SOLVER=euler bash run_curl_image_to_video.sh
 
@@ -201,6 +220,22 @@ instead of uploading a file. Do not send `input_reference` and
 curl -X POST http://localhost:8091/v1/videos \
   -F "prompt=A bear playing with yarn, smooth motion" \
   -F 'image_reference={"image_url":"https://example.com/qwen-bear.png"}'
+```
+
+For FLF2V, provide a final frame with `last_input_reference` or
+`last_image_reference`. The first frame is still required.
+
+```bash
+curl -X POST http://localhost:8091/v1/videos \
+  -F "prompt=A smooth camera move between the first and last frame" \
+  -F "input_reference=@/path/to/first.jpg" \
+  -F "last_input_reference=@/path/to/last.jpg" \
+  -F "size=1280x720" \
+  -F "num_frames=81" \
+  -F "num_inference_steps=40" \
+  -F "guidance_scale=5.0" \
+  -F "flow_shift=16.0" \
+  -F "seed=42"
 ```
 
 ### Generation with Parameters

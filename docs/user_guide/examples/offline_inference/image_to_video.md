@@ -26,9 +26,27 @@ python image_to_video.py \
   --num-frames 48 \
   --guidance-scale 5.0 \
   --num-inference-steps 40 \
-  --flow-shift 5.0 \
+  --flow-shift 3.0 \
   --fps 16 \
   --output wan21_i2v_output.mp4
+```
+
+### Wan2.1-FLF2V-14B-Diffusers
+
+```bash
+python image_to_video.py \
+  --model Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers \
+  --image first.jpg \
+  --last-image last.jpg \
+  --prompt "A smooth camera move between the first and last frame" \
+  --height 720 \
+  --width 1280 \
+  --num-frames 81 \
+  --guidance-scale 5.0 \
+  --num-inference-steps 40 \
+  --flow-shift 16.0 \
+  --fps 16 \
+  --output wan21_flf2v.mp4
 ```
 
 ### Wan2.2-I2V-A14B-Diffusers (MoE)
@@ -73,13 +91,14 @@ Key arguments:
 
 - `--model`: Model ID (Wan2.1 I2V, Wan2.2 I2V-A14B for MoE, TI2V-5B for unified T2V+I2V).
 - `--image`: Path to input image (required).
+- `--last-image`: Optional path to the final frame image for Wan2.1 FLF2V checkpoints.
 - `--prompt`: Text description of desired motion/animation.
 - `--height/--width`: Output resolution (auto-calculated from image if not set). Dimensions should be multiples of 16.
 - `--num-frames`: Number of frames (default 81).
 - `--guidance-scale` and `--guidance-scale-high`: CFG scale (applied to low/high-noise stages for MoE).
 - `--negative-prompt`: Optional list of artifacts to suppress.
 - `--boundary-ratio`: Boundary split ratio for two-stage MoE models. Leave unset for Wan2.1 single-transformer I2V.
-- `--flow-shift`: Scheduler flow shift (5.0 for 720p, 12.0 for 480p).
+- `--flow-shift`: Scheduler flow shift. Wan2.1 defaults are model-aware in serving paths: 3.0 for T2V/I2V-480P/VACE, 5.0 for I2V-720P, and 16.0 for FLF2V-720P. Wan2.2 I2V commonly uses 12.0.
 - `--sample-solver`: Wan sampling solver. Use `unipc` for the default multistep solver, or `euler` for Lightning/Distill checkpoints.
 - `--num-inference-steps`: Number of denoising steps (default 50).
 - `--fps`: Frames per second for the saved MP4 (requires `diffusers` export_to_video).

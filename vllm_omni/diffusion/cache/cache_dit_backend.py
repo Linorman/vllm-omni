@@ -1857,6 +1857,7 @@ CUSTOM_DIT_ENABLERS.update(
         "Wan22I2VPipeline": enable_cache_for_wan22,
         "Wan21Pipeline": enable_cache_for_wan21,
         "Wan21I2VPipeline": enable_cache_for_wan21,
+        "Wan21FLF2VPipeline": enable_cache_for_wan21,
         "Wan21VACEPipeline": enable_cache_for_wan21,
         "HunyuanImage3Pipeline": enable_cache_for_hunyuan_image3,
         "FluxPipeline": enable_cache_for_flux,

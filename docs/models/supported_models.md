@@ -33,6 +33,7 @@ th {
 | `ZImagePipeline` | Z-Image | `Tongyi-MAI/Z-Image-Turbo` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
 | `Wan21Pipeline` | Wan2.1-T2V | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`, `Wan-AI/Wan2.1-T2V-14B-Diffusers` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
 | `Wan21I2VPipeline` | Wan2.1-I2V | `Wan-AI/Wan2.1-I2V-14B-480P-Diffusers`, `Wan-AI/Wan2.1-I2V-14B-720P-Diffusers` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
+| `Wan21FLF2VPipeline` | Wan2.1-FLF2V | `Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
 | `Wan21VACEPipeline` | Wan2.1-VACE | `Wan-AI/Wan2.1-VACE-1.3B-diffusers`, `Wan-AI/Wan2.1-VACE-14B-diffusers` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
 | `WanPipeline` | Wan2.2-T2V, Wan2.2-TI2V | `Wan-AI/Wan2.2-T2V-A14B-Diffusers`, `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
 | `WanImageToVideoPipeline` | Wan2.2-I2V | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
@@ -78,5 +79,10 @@ th {
 |`DyninOmniForConditionalGeneration` | Dynin-Omni | `snu-aidas/Dynin-Omni` | ✅︎ | | | |
 | `ErnieImagePipeline` | ERNIE-Image | `baidu/ERNIE-Image`, `baidu/ERNIE-Image-Turbo` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
 |`HiDreamImagePipeline` | HiDream-I1-Full | `HiDream-ai/HiDream-I1-Full` | ✅︎ | ✅︎ | | |
+
+Wan2.1 support covers the official Wan2.1 Diffusers video/VACE checkpoint scope
+listed above: T2V, I2V, FLF2V, and VACE. The table does not claim a separate Wan2.1 S2V pipeline
+and does not claim a dedicated Wan2.1 image-generation endpoint. Wan2.1 checkpoints use model-aware
+scheduler defaults; FLF2V requires both first and last image inputs.
 
 ✅︎ indicates the model is supported on that backend. Empty cells mean not listed as supported on that backend.

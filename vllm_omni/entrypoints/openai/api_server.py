@@ -110,6 +110,7 @@ from vllm_omni.entrypoints.openai.protocol.images import (
     ImageGenerationResponse,
 )
 from vllm_omni.entrypoints.openai.protocol.videos import (
+    ImageReference,
     SecondStr,
     SizeStr,
     VideoDeleteResponse,
@@ -2534,6 +2535,7 @@ async def _run_video_generation_job(
     request: VideoGenerationRequest,
     video_id: str,
     reference_image: ReferenceImage | None = None,
+    last_reference_image: ReferenceImage | None = None,
     app_state: Any | None = None,
 ) -> None:
     job = await VIDEO_STORE.get(video_id)
@@ -2546,7 +2548,10 @@ async def _run_video_generation_job(
     output_path = None
     try:
         video_bytes, stage_durations, peak_memory_mb = await handler.generate_video_bytes(
-            request, video_id, reference_image=reference_image
+            request,
+            video_id,
+            reference_image=reference_image,
+            last_reference_image=last_reference_image,
         )
 
         file_name = f"{video_id}.{job.file_extension}"
@@ -2607,11 +2612,31 @@ async def _run_video_generation_job(
 VIDEO_SYNC_TIMEOUT_S = 600.0
 
 
+async def _decode_video_reference_image(
+    image_reference: ImageReference | None,
+    input_reference_bytes: bytes | None,
+    *,
+    input_field: str,
+    image_field: str,
+) -> Image.Image | None:
+    try:
+        return await decode_input_reference(
+            image_reference,
+            input_reference_bytes,
+            input_field=input_field,
+            image_field=image_field,
+        )
+    except InvalidInputReferenceError as exc:
+        raise HTTPException(400, detail=str(exc) or "Invalid input reference.") from exc
+
+
 async def _parse_video_form(
     raw_request: Request,
     prompt: str = Form(...),
     input_reference: UploadFile | None = File(default=None),
+    last_input_reference: UploadFile | None = File(default=None),
     image_reference: str | None = Form(default=None),
+    last_image_reference: str | None = Form(default=None),
     model: str | None = Form(default=None),
     seconds: SecondStr | None = Form(default=None),
     size: SizeStr | None = Form(default=None),
@@ -2634,19 +2659,32 @@ async def _parse_video_form(
     frame_interpolation_model_path: str | None = Form(default=None),
     lora: str | None = Form(default=None),
     extra_params: str | None = Form(default=None),
-) -> tuple[VideoGenerationRequest, "OmniOpenAIServingVideo", str, ReferenceImage | None]:
+) -> tuple[
+    VideoGenerationRequest,
+    "OmniOpenAIServingVideo",
+    str,
+    ReferenceImage | None,
+    ReferenceImage | None,
+]:
     """FastAPI dependency that parses video form data, validates inputs,
     resolves the handler, and decodes any reference image.
 
     Used by both ``POST /v1/videos`` (async) and ``POST /v1/videos/sync``.
     """
     input_reference_bytes = await input_reference.read() if input_reference is not None else None
+    last_input_reference_bytes = await last_input_reference.read() if last_input_reference is not None else None
     parsed_image_reference = _parse_form_json(image_reference)
+    parsed_last_image_reference = _parse_form_json(last_image_reference)
 
     if parsed_image_reference is not None and input_reference_bytes is not None:
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST.value,
             detail="Provide either input_reference or image_reference, not both.",
+        )
+    if parsed_last_image_reference is not None and last_input_reference_bytes is not None:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST.value,
+            detail="Provide either last_input_reference or last_image_reference, not both.",
         )
 
     request_data: dict[str, Any] = {
@@ -2655,6 +2693,7 @@ async def _parse_video_form(
         "seconds": seconds,
         "size": size,
         "image_reference": parsed_image_reference,
+        "last_image_reference": parsed_last_image_reference,
         "user": user,
         "width": width,
         "height": height,
@@ -2706,13 +2745,27 @@ async def _parse_video_form(
             detail=f"Video generation setup failed: {str(e)}",
         )
 
-    try:
-        image_data = await decode_input_reference(request.image_reference, input_reference_bytes)
-    except InvalidInputReferenceError as exc:
-        raise HTTPException(400, detail=str(exc) or "Invalid input reference.") from exc
+    image_data = await _decode_video_reference_image(
+        request.image_reference,
+        input_reference_bytes,
+        input_field="input_reference",
+        image_field="image_reference",
+    )
+    last_image_data = await _decode_video_reference_image(
+        request.last_image_reference,
+        last_input_reference_bytes,
+        input_field="last_input_reference",
+        image_field="last_image_reference",
+    )
 
     reference_image = ReferenceImage(data=image_data) if image_data is not None else None
-    return request, handler, effective_model_name, reference_image
+    last_reference_image = ReferenceImage(data=last_image_data) if last_image_data is not None else None
+    if reference_image is None and last_reference_image is not None:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST.value,
+            detail="last_input_reference or last_image_reference requires input_reference or image_reference.",
+        )
+    return request, handler, effective_model_name, reference_image, last_reference_image
 
 
 @router.post(
@@ -2726,18 +2779,31 @@ async def _parse_video_form(
 )
 async def create_video(
     raw_request: Request,
-    ctx: tuple[VideoGenerationRequest, OmniOpenAIServingVideo, str, ReferenceImage | None] = Depends(_parse_video_form),
+    ctx: tuple[
+        VideoGenerationRequest,
+        OmniOpenAIServingVideo,
+        str,
+        ReferenceImage | None,
+        ReferenceImage | None,
+    ] = Depends(_parse_video_form),
 ) -> VideoResponse:
     """Create an asynchronous video generation job.
 
     Accepts multipart form-data (see ``_parse_video_form`` for parameters),
     persists a queued job record, and starts generation in the background.
     """
-    request, handler, effective_model_name, reference_image = ctx
+    request, handler, effective_model_name, reference_image, last_reference_image = ctx
     ref = video_response_from_request(effective_model_name, request)
     await VIDEO_STORE.upsert(ref.id, ref)
     task = asyncio.create_task(
-        _run_video_generation_job(handler, request, ref.id, reference_image, app_state=raw_request.app.state)
+        _run_video_generation_job(
+            handler,
+            request,
+            ref.id,
+            reference_image,
+            last_reference_image,
+            app_state=raw_request.app.state,
+        )
     )
     await VIDEO_TASKS.upsert(ref.id, task)
     return ref
@@ -2754,7 +2820,13 @@ async def create_video(
 )
 async def create_video_sync(
     raw_request: Request,
-    ctx: tuple[VideoGenerationRequest, OmniOpenAIServingVideo, str, ReferenceImage | None] = Depends(_parse_video_form),
+    ctx: tuple[
+        VideoGenerationRequest,
+        OmniOpenAIServingVideo,
+        str,
+        ReferenceImage | None,
+        ReferenceImage | None,
+    ] = Depends(_parse_video_form),
 ) -> Response:
     """Synchronous video generation endpoint.
 
@@ -2765,13 +2837,18 @@ async def create_video_sync(
     Metadata is returned via response headers ``X-Request-Id``,
     ``X-Model``, and ``X-Inference-Time-S``.
     """
-    request, handler, effective_model_name, reference_image = ctx
+    request, handler, effective_model_name, reference_image, last_reference_image = ctx
     request_id = f"video_sync-{random_uuid()}"
     raw_request.state.request_metadata = RequestResponseMetadata(request_id=request_id)
     started_at = time.perf_counter()
     try:
         video_bytes, stage_durations, peak_memory_mb = await asyncio.wait_for(
-            handler.generate_video_bytes(request, request_id, reference_image=reference_image),
+            handler.generate_video_bytes(
+                request,
+                request_id,
+                reference_image=reference_image,
+                last_reference_image=last_reference_image,
+            ),
             timeout=VIDEO_SYNC_TIMEOUT_S,
         )
     except asyncio.TimeoutError:

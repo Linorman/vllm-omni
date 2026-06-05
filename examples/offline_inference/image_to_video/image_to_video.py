@@ -79,6 +79,7 @@ def parse_args() -> argparse.Namespace:
         help="Override model class name (e.g., LTX2ImageToVideoPipeline).",
     )
     parser.add_argument("--image", required=True, help="Path to input image.")
+    parser.add_argument("--last-image", default=None, help="Path to the last frame image for FLF2V models.")
     parser.add_argument("--prompt", default="", help="Text prompt describing the desired motion.")
     parser.add_argument("--negative-prompt", default="", help="Negative prompt.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
@@ -100,7 +101,10 @@ def parse_args() -> argparse.Namespace:
         help="Optional generation frame rate (used by models like LTX2). Defaults to --fps.",
     )
     parser.add_argument(
-        "--flow-shift", type=float, default=5.0, help="Scheduler flow_shift (5.0 for 720p, 12.0 for 480p)."
+        "--flow-shift",
+        type=float,
+        default=None,
+        help="Scheduler flow_shift. Defaults to the model-aware pipeline setting when omitted.",
     )
     parser.add_argument(
         "--sample-solver",
@@ -299,6 +303,11 @@ def main():
 
     # Resize image to target dimensions
     image = image.resize((width, height), PIL.Image.Resampling.LANCZOS)
+    multi_modal_data = {"image": image}
+    if args.last_image is not None:
+        last_image = PIL.Image.open(args.last_image).convert("RGB")
+        last_image = last_image.resize((width, height), PIL.Image.Resampling.LANCZOS)
+        multi_modal_data["last_image"] = last_image
 
     # Configure cache based on backend type
     cache_config = None
@@ -395,7 +404,7 @@ def main():
         {
             "prompt": args.prompt,
             "negative_prompt": args.negative_prompt,
-            "multi_modal_data": {"image": image},
+            "multi_modal_data": multi_modal_data,
         },
         OmniDiffusionSamplingParams(
             height=height,

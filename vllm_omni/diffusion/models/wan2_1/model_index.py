@@ -9,6 +9,7 @@ from typing import Any
 
 WAN21_T2V_PIPELINE = "Wan21Pipeline"
 WAN21_I2V_PIPELINE = "Wan21I2VPipeline"
+WAN21_FLF2V_PIPELINE = "Wan21FLF2VPipeline"
 WAN21_VACE_PIPELINE = "Wan21VACEPipeline"
 
 _WAN21_CLASS_MAP = {
@@ -33,6 +34,13 @@ def _looks_like_wan21_model_name(model: str | None) -> bool:
     normalized = str(model).replace("\\", "/").lower()
     basename = os.path.basename(normalized.rstrip("/"))
     return "wan2.1" in normalized or "wan21" in basename
+
+
+def _looks_like_wan21_flf2v_model_name(model: str | None) -> bool:
+    if not model:
+        return False
+    normalized = str(model).replace("\\", "/").lower()
+    return "flf2v" in normalized and ("wan2.1" in normalized or "wan21" in normalized)
 
 
 def _diffusers_version_major_minor(model_index: Mapping[str, Any]) -> tuple[int, int] | None:
@@ -87,6 +95,14 @@ def _is_wan21_i2v(model: str | None, model_index: Mapping[str, Any]) -> bool:
     return _looks_like_wan21_model_name(model) or _has_wan21_diffusers_version(model_index)
 
 
+def _is_wan21_flf2v(model: str | None, model_index: Mapping[str, Any]) -> bool:
+    if model_index.get("_class_name") != "WanImageToVideoPipeline":
+        return False
+    if _component_is_present(model_index, "transformer_2"):
+        return False
+    return _looks_like_wan21_flf2v_model_name(model)
+
+
 def _is_wan21_vace(
     model: str | None,
     model_index: Mapping[str, Any],
@@ -116,6 +132,8 @@ def resolve_wan21_pipeline_class_name(
         return None
     if _is_wan21_t2v(model, model_index, transformer_config):
         return WAN21_T2V_PIPELINE
+    if _is_wan21_flf2v(model, model_index):
+        return WAN21_FLF2V_PIPELINE
     if _is_wan21_i2v(model, model_index):
         return WAN21_I2V_PIPELINE
     if _is_wan21_vace(model, model_index, transformer_config):
@@ -125,6 +143,7 @@ def resolve_wan21_pipeline_class_name(
 __all__ = [
     "WAN21_T2V_PIPELINE",
     "WAN21_I2V_PIPELINE",
+    "WAN21_FLF2V_PIPELINE",
     "WAN21_VACE_PIPELINE",
     "resolve_wan21_pipeline_class_name",
 ]

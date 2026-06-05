@@ -30,6 +30,7 @@ Frame interpolation is currently supported for:
 - `WanImageToVideoPipeline`
 - `Wan21Pipeline`
 - `Wan21I2VPipeline`
+- `Wan21FLF2VPipeline`
 - `Wan21VACEPipeline`
 
 ## Request Parameters

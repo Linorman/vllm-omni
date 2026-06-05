@@ -84,7 +84,7 @@ python vace_video_generation.py \
 | `--num-frames` | int | `81` | Number of video frames to generate |
 | `--num-inference-steps` | int | `30` | Number of denoising steps (more steps = higher quality, slower) |
 | `--guidance-scale` | float | `5.0` | Classifier-free guidance scale |
-| `--flow-shift` | float | `5.0` | Scheduler flow shift parameter |
+| `--flow-shift` | float | `None` | Scheduler flow shift parameter; unset uses the Wan2.1 model-aware default |
 | `--seed` | int | `42` | Random seed for deterministic sampling |
 | `--fps` | int | `16` | Frames per second for the saved MP4 |
 | `--output` | str | `"vace_output.mp4"` | Path to save the generated video |
@@ -96,6 +96,10 @@ python vace_video_generation.py \
 | `--enforce-eager` | flag | off | Disable torch.compile |
 
 > If you encounter OOM errors, try `--vae-use-tiling` or multi-GPU parallelism options (`--ulysses-degree`, `--cfg-parallel-size`).
+
+For this release, `/v1/videos` exposes Wan2.1 VACE prompt and reference-image
+conditioning only. VACE source-video and mask conditioning modes are offline-only;
+use this script for `--video`, `--mask`, `v2lf`, and inpaint workflows.
 
 ## More CLI Examples
 

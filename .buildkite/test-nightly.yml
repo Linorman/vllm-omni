@@ -1087,7 +1087,8 @@ steps:
       - label: ":full_moon: Diffusion X2V · Function Test"
         timeout_in_minutes: 90
         commands:
-          - pytest -s -v tests/e2e/online_serving/test_wan22_expansion.py tests/e2e/online_serving/test_wan_2_1_vace_expansion.py tests/e2e/online_serving/test_hunyuan_video_15_expansion.py tests/e2e/offline_inference/test_wan22_autoround_w4a16_expansion.py -m "full_model and cuda" --run-level "full_model"
+          - pytest -s -v tests/e2e/online_serving/test_wan22_expansion.py tests/e2e/online_serving/test_hunyuan_video_15_expansion.py tests/e2e/offline_inference/test_wan22_autoround_w4a16_expansion.py -m "full_model and cuda" --run-level "full_model"
+          - python -m pytest tests/e2e/online_serving/test_wan_2_1_expansion.py tests/e2e/online_serving/test_wan_2_1_vace_expansion.py -q -k "t2v_13b_cache_dit_layerwise_offload or t2v_14b_ulysses_sp or i2v_480p_ring or i2v_720p_tensor_parallel_vae_patch or flf2v_720p_pipeline_parallel or vace_13b_reference_image or vace_14b_cfg_parallel" -m "full_model and cuda" --run-level "full_model"
         agents:
           queue: "mithril-h100-pool"
         plugins:
@@ -1125,6 +1126,8 @@ steps:
       - label: ":full_moon: Diffusion X2V · Accuracy Test"
         timeout_in_minutes: 180
         commands:
+          - python -c 'from pathlib import Path; from PIL import Image; out=Path("/tmp/wan21-test-assets"); out.mkdir(parents=True, exist_ok=True); Image.new("RGB", (320, 480), (24, 96, 168)).save(out / "input.png"); Image.new("RGB", (320, 480), (168, 96, 24)).save(out / "last.png")'
+          - WAN21_IMAGE_SOURCE="${WAN21_IMAGE_SOURCE:-/tmp/wan21-test-assets/input.png}" WAN21_LAST_IMAGE_SOURCE="${WAN21_LAST_IMAGE_SOURCE:-/tmp/wan21-test-assets/last.png}" python -m pytest tests/e2e/accuracy/wan21/test_wan21_video_similarity.py -q -m "benchmark" --run-level full_model
           - pytest -s -v tests/e2e/accuracy/wan22_i2v/test_wan22_i2v_video_similarity.py -m full_model --run-level full_model
           - pytest -s -v tests/e2e/accuracy/hunyuanvideo15_t2v/test_hunyuanvideo15_t2v_video_similarity.py -m full_model --run-level full_model
           - pytest -s -v tests/e2e/accuracy/hunyuanvideo15_i2v/test_hunyuanvideo15_i2v_video_similarity.py -m full_model --run-level full_model

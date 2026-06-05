@@ -84,7 +84,14 @@ class BlockingVideoHandler:
         if self.stage_configs is None:
             self.stage_configs = stage_configs
 
-    async def generate_video_bytes(self, request, reference_id, *, reference_image=None):
+    async def generate_video_bytes(
+        self,
+        request,
+        reference_id,
+        *,
+        reference_image=None,
+        last_reference_image=None,
+    ):
         self.started.set()
         try:
             await asyncio.Future()
@@ -330,6 +337,71 @@ def test_i2v_video_generation_with_image_reference_form(test_client, mocker: Moc
     input_image = prompt["multi_modal_data"]["image"]
     assert isinstance(input_image, Image.Image)
     assert input_image.size == (40, 24)
+
+
+def test_async_video_generation_with_first_and_last_image_references(test_client, mocker: MockerFixture):
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        return_value=b"fake-video",
+    )
+    response = test_client.post(
+        "/v1/videos",
+        data={
+            "prompt": "A fox running through snow.",
+            "size": "80x48",
+            "image_reference": json.dumps({"image_url": _make_test_image_data_url((40, 24))}),
+            "last_image_reference": json.dumps({"image_url": _make_test_image_data_url((32, 18))}),
+        },
+    )
+
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+
+    engine = test_client.app.state.openai_serving_video._engine_client
+    prompt = engine.captured_prompt
+    input_image = prompt["multi_modal_data"]["image"]
+    last_image = prompt["multi_modal_data"]["last_image"]
+    assert isinstance(input_image, Image.Image)
+    assert isinstance(last_image, Image.Image)
+    assert input_image.size == (80, 48)
+    assert last_image.size == (80, 48)
+
+
+def test_async_video_generation_with_uploaded_first_and_last_images(test_client, mocker: MockerFixture):
+    first_image_bytes = _make_test_image_bytes((48, 32))
+    last_image_bytes = _make_test_image_bytes((30, 20))
+
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        return_value=b"fake-video",
+    )
+    response = test_client.post(
+        "/v1/videos",
+        data={
+            "prompt": "A bear playing with yarn.",
+            "width": "96",
+            "height": "64",
+        },
+        files={
+            "input_reference": ("input.png", first_image_bytes, "image/png"),
+            "last_input_reference": ("last.png", last_image_bytes, "image/png"),
+        },
+    )
+
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+
+    engine = test_client.app.state.openai_serving_video._engine_client
+    prompt = engine.captured_prompt
+    assert "multi_modal_data" in prompt
+    input_image = prompt["multi_modal_data"]["image"]
+    last_image = prompt["multi_modal_data"]["last_image"]
+    assert isinstance(input_image, Image.Image)
+    assert isinstance(last_image, Image.Image)
+    assert input_image.size == (96, 64)
+    assert last_image.size == (96, 64)
 
 
 def test_seconds_defaults_fps_and_frames(test_client, mocker: MockerFixture):
@@ -753,9 +825,63 @@ def test_invalid_uploaded_input_reference_returns_400(test_client):
     assert response.json()["detail"] == "Invalid input_reference: provided content is not a valid image."
 
 
+def test_rejects_last_input_reference_and_last_image_reference_together(test_client):
+    response = test_client.post(
+        "/v1/videos",
+        data={
+            "prompt": "bad refs",
+            "last_image_reference": '{"image_url": "https://example.com/last.png"}',
+        },
+        files={"last_input_reference": ("last.png", _make_test_image_bytes(), "image/png")},
+    )
+    assert response.status_code == 400
+    assert "either last_input_reference or last_image_reference" in response.json()["detail"].lower()
+
+
+def test_invalid_uploaded_last_input_reference_returns_400(test_client):
+    response = test_client.post(
+        "/v1/videos",
+        data={"prompt": "bad last upload"},
+        files={"last_input_reference": ("last.png", b"not-an-image", "image/png")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid last_input_reference: provided content is not a valid image."
+
+
+def test_rejects_last_input_reference_without_first_reference(test_client):
+    response = test_client.post(
+        "/v1/videos",
+        data={"prompt": "last only"},
+        files={"last_input_reference": ("last.png", _make_test_image_bytes(), "image/png")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "last_input_reference or last_image_reference requires input_reference or image_reference."
+    )
+
+
+def test_unsupported_last_image_reference_file_id_returns_400(test_client):
+    response = test_client.post(
+        "/v1/videos",
+        data={
+            "prompt": "unsupported last ref",
+            "image_reference": json.dumps({"image_url": _make_test_image_data_url()}),
+            "last_image_reference": '{"file_id": "file-123"}',
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid last_image_reference: file_id is not supported yet."
+
+
 def test_video_request_validation():
     req = VideoGenerationRequest(prompt="test")
     assert req.prompt == "test"
+    req = VideoGenerationRequest(
+        prompt="test",
+        last_image_reference={"image_url": "https://example.com/last.png"},
+    )
+    assert req.last_image_reference is not None
+    assert req.last_image_reference.image_url == "https://example.com/last.png"
     with pytest.raises(ValueError):
         VideoGenerationRequest(prompt="test", size="invalid")
 
@@ -764,6 +890,11 @@ def test_video_request_validation():
 
     with pytest.raises(ValueError):
         VideoGenerationRequest(prompt="test", image_reference={"file_id": "file-1", "image_url": "https://example.com"})
+    with pytest.raises(ValueError):
+        VideoGenerationRequest(
+            prompt="test",
+            last_image_reference={"file_id": "file-1", "image_url": "https://example.com"},
+        )
     with pytest.raises(ValueError):
         VideoGenerationRequest(prompt="test", frame_interpolation_exp=0)
     with pytest.raises(ValueError):
@@ -1120,6 +1251,31 @@ def test_sync_i2v_with_image_reference(test_client, mocker: MockerFixture):
 
     assert response.status_code == 200
     assert response.content == b"ref-video"
+
+
+def test_sync_i2v_with_first_and_last_image_references(test_client, mocker: MockerFixture):
+    _mock_encode_video_bytes(mocker, b"ref-video")
+    response = test_client.post(
+        "/v1/videos/sync",
+        data={
+            "prompt": "A fox running through snow.",
+            "size": "80x48",
+            "image_reference": json.dumps({"image_url": _make_test_image_data_url((40, 24))}),
+            "last_image_reference": json.dumps({"image_url": _make_test_image_data_url((32, 18))}),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"ref-video"
+
+    engine = test_client.app.state.openai_serving_video._engine_client
+    prompt = engine.captured_prompt
+    input_image = prompt["multi_modal_data"]["image"]
+    last_image = prompt["multi_modal_data"]["last_image"]
+    assert isinstance(input_image, Image.Image)
+    assert isinstance(last_image, Image.Image)
+    assert input_image.size == (80, 48)
+    assert last_image.size == (80, 48)
 
 
 def test_sync_missing_handler_returns_503():

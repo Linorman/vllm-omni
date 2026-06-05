@@ -13,12 +13,25 @@ CLIP_SECONDS="${CLIP_SECONDS:-2}"
 FPS="${FPS:-16}"
 NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-40}"
 GUIDANCE_SCALE="${GUIDANCE_SCALE:-4.0}"
-FLOW_SHIFT="${FLOW_SHIFT:-5.0}"
 SEED="${SEED:-42}"
 
 IS_WAN21=0
 if [[ "${MODEL}" == *"Wan2.1"* || "${MODEL}" == *"wan2.1"* ]]; then
   IS_WAN21=1
+fi
+
+if [ "${IS_WAN21}" = "1" ]; then
+  if [ -z "${FLOW_SHIFT:-}" ]; then
+    if [[ "${MODEL}" == *"FLF2V"* || "${MODEL}" == *"flf2v"* ]]; then
+      FLOW_SHIFT="16.0"
+    elif [[ ( "${MODEL}" == *"I2V"* || "${MODEL}" == *"i2v"* ) && ( "${MODEL}" == *"720P"* || "${MODEL}" == *"720p"* ) ]]; then
+      FLOW_SHIFT="5.0"
+    else
+      FLOW_SHIFT="3.0"
+    fi
+  fi
+else
+  FLOW_SHIFT="${FLOW_SHIFT:-5.0}"
 fi
 
 if [ -z "${OUTPUT_PATH:-}" ]; then
