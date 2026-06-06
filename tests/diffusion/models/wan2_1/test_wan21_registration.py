@@ -562,16 +562,14 @@ def test_wan21_make_layers_factories_accept_prefix_keyword():
             assert "prefix" in parameter_names, path
 
 
-def test_wan21_defaults_attention_to_non_cudnn_sdpa_backend():
+def test_wan21_does_not_override_attention_backend_defaults():
     source = _source(WAN21_COMMON)
-    assert "_with_wan21_attention_defaults" in source
-    assert "TORCH_SDPA_NO_CUDNN" in source
-    assert "attention_config.default is not None" in source
-    assert "role in per_role" in source
-    assert "category in per_role" in source
+    assert "_with_wan21_attention_defaults" not in source
+    assert "WAN21_DEFAULT_ATTENTION_BACKEND" not in source
+    assert "TORCH_SDPA_NO_CUDNN" not in source
 
 
-def test_wan21_transformer_creation_uses_defaulted_attention_config_context():
+def test_wan21_transformer_creation_uses_current_attention_config_context():
     init_fn = _class_method_def(WAN21_COMMON, "Wan21PipelineBase", "__init__")
     matching_contexts = []
     for node in ast.walk(init_fn):

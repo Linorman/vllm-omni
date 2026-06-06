@@ -8,7 +8,6 @@ import logging
 import os
 from collections.abc import Iterable
 from contextlib import nullcontext
-from dataclasses import replace
 from typing import Any, ClassVar, cast
 
 import PIL.Image
@@ -26,8 +25,6 @@ from vllm.sequence import IntermediateTensors
 
 from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm_omni.diffusion.data import (
-    AttentionConfig,
-    AttentionSpec,
     DiffusionOutput,
     OmniDiffusionConfig,
 )
@@ -65,36 +62,6 @@ from vllm_omni.platforms import current_omni_platform
 logger = logging.getLogger(__name__)
 
 WAN21_SAMPLE_SOLVER_CHOICES = {"unipc"}
-WAN21_DEFAULT_ATTENTION_BACKEND = "TORCH_SDPA_NO_CUDNN"
-WAN21_ATTENTION_ROLE_CATEGORIES = {
-    "wan2_1.self": "self",
-    "wan2_1.cross": "cross",
-}
-
-
-def _with_wan21_attention_defaults(od_config: OmniDiffusionConfig) -> OmniDiffusionConfig:
-    attention_config = od_config.diffusion_attention_config
-    if attention_config.default is not None:
-        return od_config
-
-    per_role = dict(attention_config.per_role)
-    changed = False
-    for role, category in WAN21_ATTENTION_ROLE_CATEGORIES.items():
-        if role in per_role or category in per_role:
-            continue
-        per_role[role] = AttentionSpec(backend=WAN21_DEFAULT_ATTENTION_BACKEND)
-        changed = True
-
-    if not changed:
-        return od_config
-
-    return replace(
-        od_config,
-        diffusion_attention_config=AttentionConfig(
-            default=attention_config.default,
-            per_role=per_role,
-        ),
-    )
 
 
 def retrieve_latents(
@@ -603,7 +570,6 @@ class Wan21PipelineBase(
     support_image_input = False
 
     def __init__(self, *, od_config: OmniDiffusionConfig, prefix: str = ""):
-        od_config = _with_wan21_attention_defaults(od_config)
         super().__init__()
         self.od_config = od_config
         self.device = get_local_device()
