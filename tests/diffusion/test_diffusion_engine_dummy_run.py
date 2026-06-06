@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from types import SimpleNamespace
+
 import pytest
 
 from vllm_omni.diffusion import diffusion_engine
+from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
@@ -55,3 +58,29 @@ def test_dummy_run_num_frames_uses_audio_input_fallback(monkeypatch: pytest.Monk
     )
 
     assert diffusion_engine.get_dummy_run_num_frames("unknown", supports_audio_input=True) == 2
+
+
+def test_dummy_run_supplies_two_images_for_two_image_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = object.__new__(DiffusionEngine)
+    engine.od_config = SimpleNamespace(model_class_name="Wan21FLF2VPipeline")
+
+    monkeypatch.setattr(diffusion_engine, "supports_multimodal_input", lambda od_config: (True, False))
+    monkeypatch.setattr(diffusion_engine, "image_color_format", lambda model_class_name: "RGB")
+
+    captured = {}
+
+    def _capture_pre_process(request):
+        captured["request"] = request
+        return request
+
+    engine.pre_process_func = _capture_pre_process
+    engine.add_req_and_wait_for_response = lambda request: SimpleNamespace(error=None)
+
+    engine._dummy_run()
+
+    image_input = captured["request"].prompts[0]["multi_modal_data"]["image"]
+    assert isinstance(image_input, list)
+    assert len(image_input) == 2
+    assert image_input[0].size == (512, 512)
+    assert image_input[1].size == (512, 512)
+    assert captured["request"].sampling_params.num_frames == 5

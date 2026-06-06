@@ -16,6 +16,7 @@ import pytest
 import torch
 
 import vllm_omni.diffusion.attention.layer as layer_mod
+import vllm_omni.diffusion.attention.parallel.ring as ring_mod
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.config import (
@@ -420,6 +421,97 @@ class TestAttentionInitUsesCurrentDiffusionConfig:
         assert attn.use_ring is True
         assert attn.ring_runner is not None
         assert attn.ring_runner.attn_backend_pref == "TORCH_SDPA"
+
+    def test_attention_init_passes_platform_default_backend_to_ring(self, monkeypatch):
+        class _FakeAttentionImpl:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def forward(self, query, key, value, attn_metadata=None):
+                return query
+
+        class _FakeBackend:
+            @staticmethod
+            def get_name() -> str:
+                return "CUDNN_ATTN"
+
+            @staticmethod
+            def get_impl_cls():
+                return _FakeAttentionImpl
+
+        class _FakeRingParallelAttention:
+            def __init__(self, sp_group, attn_backend_pref=None):
+                self.sp_group = sp_group
+                self.attn_backend_pref = attn_backend_pref
+
+        monkeypatch.setattr(
+            layer_mod,
+            "get_attn_backend_for_role",
+            lambda role, head_size, attention_config=None, role_category=None: (_FakeBackend, None),
+        )
+        monkeypatch.setattr(layer_mod.SDPABackend, "get_impl_cls", staticmethod(lambda: _FakeAttentionImpl))
+        monkeypatch.setattr(layer_mod, "build_parallel_attention_strategy", lambda **kwargs: object())
+        monkeypatch.setattr(layer_mod, "get_sp_group", lambda: SimpleNamespace(ring_group="ring-group"))
+        monkeypatch.setattr(layer_mod, "RingParallelAttention", _FakeRingParallelAttention)
+
+        od_config = SimpleNamespace(
+            diffusion_attention_config=AttentionConfig(),
+            parallel_config=SimpleNamespace(ring_degree=2),
+            diffusion_kv_cache_dtype=None,
+            diffusion_kv_cache_skip_step_indices=None,
+            diffusion_kv_cache_skip_layer_indices=None,
+        )
+
+        with set_current_diffusion_config(od_config):
+            attn = Attention(
+                num_heads=4,
+                head_size=64,
+                causal=False,
+                softmax_scale=1.0,
+                role="self",
+                role_category="self",
+                qkv_layout="BSND",
+            )
+
+        assert attn.backend_pref == "CUDNN_ATTN"
+        assert attn.use_ring is True
+        assert attn.ring_runner is not None
+        assert attn.ring_runner.attn_backend_pref == "CUDNN_ATTN"
+
+
+class TestRingParallelAttentionBackendSelection:
+    def test_cudnn_attention_pref_uses_torch_sdpa_ring_backend(self, monkeypatch):
+        import vllm_omni.diffusion.attention.backends.ring_flash_attn as ring_flash_attn
+        import vllm_omni.diffusion.attention.backends.ring_pytorch_attn as ring_pytorch_attn
+
+        calls = []
+
+        def _fake_pytorch_attn_func(query, key, value, **kwargs):
+            calls.append("pytorch")
+            return query
+
+        def _fake_flash_attn_func(query, key, value, **kwargs):
+            calls.append("flash")
+            raise AssertionError("CUDNN platform default must not fall through to flash ring attention")
+
+        monkeypatch.setattr(ring_mod, "HAS_FA3", False)
+        monkeypatch.setattr(ring_mod, "HAS_AITER", False)
+        monkeypatch.setattr(ring_mod, "HAS_FLASH_ATTN", True)
+        monkeypatch.setattr(ring_pytorch_attn, "ring_pytorch_attn_func", _fake_pytorch_attn_func)
+        monkeypatch.setattr(ring_flash_attn, "ring_flash_attn_func", _fake_flash_attn_func)
+
+        runner = ring_mod.RingParallelAttention(
+            SimpleNamespace(ring_group="ring-group"),
+            attn_backend_pref="CUDNN_ATTN",
+        )
+        query = torch.randn(1, 2, 1, 8, dtype=torch.float16)
+        key = torch.randn(1, 2, 1, 8, dtype=torch.float16)
+        value = torch.randn(1, 2, 1, 8, dtype=torch.float16)
+
+        output = runner.run_attention(query, key, value, attn_metadata=None)
+
+        assert output is query
+        assert calls == ["pytorch"]
 
 
 class TestDiffusionKvCacheQuantization:

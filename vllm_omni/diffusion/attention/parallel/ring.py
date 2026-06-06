@@ -23,6 +23,16 @@ if TYPE_CHECKING:
 
 logger = init_logger(__name__)
 
+_TORCH_SDPA_RING_BACKENDS = {
+    "sdpa",
+    "torch",
+    "torch_sdpa",
+    "sdpa_no_cudnn",
+    "torch_sdpa_no_cudnn",
+    "cudnn",
+    "cudnn_attn",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class _RingCtx(ParallelAttentionContext):
@@ -112,6 +122,8 @@ class RingParallelAttention:
 
         # FP32 is not supported by Flash Attention, force SDPA
         if query.dtype == torch.float32:
+            backend_pref = "sdpa"
+        elif backend_pref in _TORCH_SDPA_RING_BACKENDS:
             backend_pref = "sdpa"
         elif not HAS_FA3 and not HAS_FLASH_ATTN and not HAS_AITER:
             if backend_pref != "sdpa":

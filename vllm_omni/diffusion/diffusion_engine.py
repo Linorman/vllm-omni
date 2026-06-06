@@ -25,6 +25,7 @@ from vllm_omni.diffusion.data import (
     OmniDiffusionConfig,
 )
 from vllm_omni.diffusion.executor.abstract import DiffusionExecutor
+from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
 from vllm_omni.diffusion.registry import (
     DiffusionModelRegistry,
     get_diffusion_post_process_func,
@@ -708,20 +709,30 @@ class DiffusionEngine:
         height = 512
         width = 512
         prompt: OmniTextPrompt = {"prompt": "dummy run"}
+        min_num_frames = 1
 
         supports_image_input, supports_audio_input = supports_multimodal_input(self.od_config)
         if supports_image_input:
             # Provide a dummy image input if the model supports it
             color_format = image_color_format(self.od_config.model_class_name)
             dummy_image = PIL.Image.new(color_format, (width, height))
-            prompt.setdefault("multi_modal_data", {})["image"] = dummy_image
+            metadata = get_diffusion_model_metadata(self.od_config.model_class_name)
+            if metadata.max_multimodal_image_inputs == 2:
+                image_input = [dummy_image, dummy_image.copy()]
+                min_num_frames = 2
+            else:
+                image_input = dummy_image
+            prompt.setdefault("multi_modal_data", {})["image"] = image_input
 
         if supports_audio_input:
             audio_sr = 16000
             dummy_audio = np.random.randn(audio_sr * 2).astype(np.float32)
             prompt.setdefault("multi_modal_data", {})["audio"] = dummy_audio
 
-        num_frames = get_dummy_run_num_frames(self.od_config.model_class_name, supports_audio_input)
+        num_frames = max(
+            min_num_frames,
+            get_dummy_run_num_frames(self.od_config.model_class_name, supports_audio_input),
+        )
         req = OmniDiffusionRequest(
             prompts=[prompt],
             request_id=DUMMY_DIFFUSION_REQUEST_ID,

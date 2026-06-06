@@ -85,10 +85,11 @@ class Attention(nn.Module):
         )
         if spec is not None:
             backend_kwargs = spec.extra or None
-            self.backend_pref = spec.backend
+            self.backend_pref = spec.backend or attn_backend_cls.get_name()
             logger.debug("Attention(role=%s) → backend=%s", role, spec.backend)
         else:
-            logger.debug("Attention(role=%s) → platform default", role)
+            self.backend_pref = attn_backend_cls.get_name()
+            logger.debug("Attention(role=%s) → platform default backend=%s", role, self.backend_pref)
 
         self.attn_backend = attn_backend_cls
         self.attn_impl_cls = self.attn_backend.get_impl_cls()

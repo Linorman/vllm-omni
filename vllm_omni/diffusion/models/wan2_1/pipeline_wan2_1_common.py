@@ -21,14 +21,14 @@ from transformers import (
     CLIPVisionModel,
     UMT5EncoderModel,
 )
+from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm.sequence import IntermediateTensors
 
-from vllm.model_executor.models.utils import AutoWeightsLoader
+from vllm_omni.diffusion.config import set_current_diffusion_config
 from vllm_omni.diffusion.data import (
     DiffusionOutput,
     OmniDiffusionConfig,
 )
-from vllm_omni.diffusion.config import set_current_diffusion_config
 from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import (
     DistributedAutoencoderKLWan,
 )
@@ -49,8 +49,6 @@ from vllm_omni.diffusion.models.interface import (
 )
 from vllm_omni.diffusion.models.progress_bar import ProgressBarMixin
 from vllm_omni.diffusion.models.schedulers import FlowUniPCMultistepScheduler
-from .wan2_1_transformer import Wan21Transformer3DModel
-from .wan2_1_vace_transformer import Wan21VACETransformer3DModel
 from vllm_omni.diffusion.postprocess import interpolate_video_tensor
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import (
     DiffusionPipelineProfilerMixin,
@@ -58,6 +56,9 @@ from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import (
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniTextPrompt
 from vllm_omni.platforms import current_omni_platform
+
+from .wan2_1_transformer import Wan21Transformer3DModel
+from .wan2_1_vace_transformer import Wan21VACETransformer3DModel
 
 logger = logging.getLogger(__name__)
 
@@ -1314,6 +1315,7 @@ class Wan21I2VPipelineBase(Wan21PipelineBase, SupportImageInput):
 
 class Wan21FLF2VPipelineBase(Wan21I2VPipelineBase):
     support_image_input = True
+    dummy_run_num_frames = 5
 
     def prepare_i2v_latents(
         self,
