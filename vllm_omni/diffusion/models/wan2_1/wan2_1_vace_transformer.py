@@ -20,6 +20,7 @@ from vllm_omni.diffusion.distributed.parallel_state import (
 from vllm_omni.diffusion.distributed.sp_plan import SequenceParallelInput
 from vllm_omni.diffusion.distributed.sp_sharding import sp_shard
 from vllm_omni.diffusion.forward_context import get_forward_context
+
 from .wan2_1_transformer import (
     Transformer2DModelOutput,
     Wan21Transformer3DModel,
@@ -87,9 +88,7 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
 
     @staticmethod
     def _is_transformer_block(name: str, module) -> bool:
-        return (
-            name.startswith("blocks.") or name.startswith("vace_blocks.")
-        ) and name.split(".")[-1].isdigit()
+        return (name.startswith("blocks.") or name.startswith("vace_blocks.")) and name.split(".")[-1].isdigit()
 
     _hsdp_shard_conditions = [_is_transformer_block]
 
@@ -116,16 +115,13 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
             vace_layers = [0, 5, 10, 15, 20, 25, 30, 35]
         if max(vace_layers) >= self.config.num_layers:
             raise ValueError(
-                f"VACE layers {vace_layers} exceed the number of transformer layers "
-                f"{self.config.num_layers}."
+                f"VACE layers {vace_layers} exceed the number of transformer layers {self.config.num_layers}."
             )
         if 0 not in vace_layers:
             raise ValueError("VACE layers must include layer 0.")
 
         self.vace_layers = list(vace_layers)
-        self.vace_layers_mapping = {
-            layer_idx: vace_idx for vace_idx, layer_idx in enumerate(vace_layers)
-        }
+        self.vace_layers_mapping = {layer_idx: vace_idx for vace_idx, layer_idx in enumerate(vace_layers)}
         vace_in_channels = vace_in_channels or 96
         self.config.vace_layers = self.vace_layers
         self.config.vace_in_channels = vace_in_channels
@@ -284,14 +280,9 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
                 vace_hints.append(conditioning_states)
         elif vace_context is not None and intermediate_tensors is not None:
             try:
-                vace_hints = [
-                    intermediate_tensors[f"vace_hint_{i}"]
-                    for i in range(len(self.vace_layers))
-                ]
+                vace_hints = [intermediate_tensors[f"vace_hint_{i}"] for i in range(len(self.vace_layers))]
             except KeyError as exc:
-                raise RuntimeError(
-                    "vace_hints must be provided for non-first VACE PP stages"
-                ) from exc
+                raise RuntimeError("vace_hints must be provided for non-first VACE PP stages") from exc
 
         # Normalize scale to per-layer list
         if vace_hints is not None and isinstance(vace_context_scale, (int, float)):

@@ -80,8 +80,7 @@ WAN21_CASE_SPECS = [
 ]
 
 WAN21_CASES = [
-    pytest.param(model, case_key, input_mode, id=case_key)
-    for model, case_key, input_mode in WAN21_CASE_SPECS
+    pytest.param(model, case_key, input_mode, id=case_key) for model, case_key, input_mode in WAN21_CASE_SPECS
 ]
 
 SERVER_CASES = [
@@ -351,9 +350,7 @@ def test_add_reference_file_materializes_data_url() -> None:
 
 
 def test_ensure_wan21_ftfy_fallback_sets_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    from diffusers.pipelines.wan import pipeline_wan
-    from diffusers.pipelines.wan import pipeline_wan_i2v
-    from diffusers.pipelines.wan import pipeline_wan_vace
+    from diffusers.pipelines.wan import pipeline_wan, pipeline_wan_i2v, pipeline_wan_vace
 
     modules = [pipeline_wan, pipeline_wan_i2v, pipeline_wan_vace]
     for module in modules:

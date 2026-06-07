@@ -11,7 +11,6 @@ from typing import Any
 import PIL.Image
 import pytest
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 WAN21_DIR = PROJECT_ROOT / "vllm_omni" / "diffusion" / "models" / "wan2_1"
 ATTENTION_LAYER = PROJECT_ROOT / "vllm_omni" / "diffusion" / "attention" / "layer.py"
@@ -76,11 +75,7 @@ def _dict_entry_node(path: Path, dict_name: str, key: str) -> ast.AST:
             isinstance(target, ast.Name) and target.id == dict_name for target in node.targets
         ):
             value = node.value
-        elif (
-            isinstance(node, ast.AnnAssign)
-            and isinstance(node.target, ast.Name)
-            and node.target.id == dict_name
-        ):
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == dict_name:
             value = node.value
         if value is None:
             continue
@@ -112,11 +107,7 @@ def _function_def(path: Path, name: str) -> ast.FunctionDef:
 
 def _exec_common_functions(*names: str) -> dict[str, Any]:
     tree = ast.parse(_source(WAN21_COMMON))
-    functions = {
-        node.name: node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-    }
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
     module = ast.Module(body=[functions[name] for name in names], type_ignores=[])
     ast.fix_missing_locations(module)
     namespace = {
@@ -380,9 +371,7 @@ def test_wan21_flf2v_preprocessor_normalizes_two_image_forms():
 
 
 def test_wan21_flf2v_image_embeds_helper_accepts_unexpanded_and_expanded_inputs():
-    helper = _exec_common_functions("_prepare_wan21_flf2v_image_embeds")[
-        "_prepare_wan21_flf2v_image_embeds"
-    ]
+    helper = _exec_common_functions("_prepare_wan21_flf2v_image_embeds")["_prepare_wan21_flf2v_image_embeds"]
     prompt_batch_size = 3
     unexpanded = FakeTensor((2, 4, 5))
     expanded = FakeTensor((2 * prompt_batch_size, 4, 5))
@@ -394,9 +383,7 @@ def test_wan21_flf2v_image_embeds_helper_accepts_unexpanded_and_expanded_inputs(
 
 
 def test_wan21_flf2v_image_embeds_helper_rejects_ambiguous_batch_shapes():
-    helper = _exec_common_functions("_prepare_wan21_flf2v_image_embeds")[
-        "_prepare_wan21_flf2v_image_embeds"
-    ]
+    helper = _exec_common_functions("_prepare_wan21_flf2v_image_embeds")["_prepare_wan21_flf2v_image_embeds"]
 
     with pytest.raises(ValueError, match=r"Wan2\.1 FLF2V image_embeds must have shape"):
         helper(FakeTensor((3, 8, 5)), prompt_batch_size=3)
@@ -459,7 +446,7 @@ def test_wan21_predict_noise_preserves_intermediate_tensors_for_pipeline_paralle
 def test_pipeline_parallel_vae_decode_wrapper_is_idempotent_for_wan21_inheritance():
     source = _source(PIPELINE_PARALLEL)
     assert "_vllm_omni_pp_wrapped" in source
-    assert "getattr(orig_decode, \"_vllm_omni_pp_wrapped\", False)" in source
+    assert 'getattr(orig_decode, "_vllm_omni_pp_wrapped", False)' in source
 
 
 @pytest.mark.parametrize(
@@ -534,10 +521,7 @@ def test_wan21_does_not_reject_request_default_guidance_scale_2_autofill():
                 reject_conditions.append(node.test)
 
     assert reject_conditions
-    assert all(
-        _is_name_call(condition, "_wan21_has_unsupported_guidance_scale_2")
-        for condition in reject_conditions
-    )
+    assert all(_is_name_call(condition, "_wan21_has_unsupported_guidance_scale_2") for condition in reject_conditions)
 
 
 def test_wan21_prepare_forward_resets_scheduler_begin_index_like_diffusers():
@@ -586,10 +570,7 @@ def test_wan21_transformer_creation_uses_current_attention_config_context():
     for node in ast.walk(init_fn):
         if not isinstance(node, ast.With):
             continue
-        uses_defaulted_config = any(
-            _is_set_current_diffusion_config_call(item.context_expr)
-            for item in node.items
-        )
+        uses_defaulted_config = any(_is_set_current_diffusion_config_call(item.context_expr) for item in node.items)
         if uses_defaulted_config and _contains_transformer_creation(node):
             matching_contexts.append(node)
 

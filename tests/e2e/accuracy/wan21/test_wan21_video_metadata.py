@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 from tests.e2e.accuracy.wan21.video_metadata import ffprobe_video
 

@@ -10,7 +10,6 @@ import torch
 
 from vllm_omni.diffusion.models.wan2_1.wan2_1_transformer import WanImageEmbedding, WanRotaryPosEmbed
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 WAN21_DIR = PROJECT_ROOT / "vllm_omni" / "diffusion" / "models" / "wan2_1"
 WAN21_TRANSFORMER = WAN21_DIR / "wan2_1_transformer.py"

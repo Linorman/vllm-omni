@@ -105,11 +105,7 @@ class Attention(nn.Module):
         # Instantiate fallback backend for float32 support. Preserve the
         # non-cuDNN SDPA variant when selected so fallback does not re-enable
         # cuDNN attention under torch.compile.
-        fallback_backend_cls = (
-            self.attn_backend
-            if self.attn_backend.get_name() == "SDPA_NO_CUDNN"
-            else SDPABackend
-        )
+        fallback_backend_cls = self.attn_backend if self.attn_backend.get_name() == "SDPA_NO_CUDNN" else SDPABackend
         self.sdpa_fallback = fallback_backend_cls.get_impl_cls()(
             num_heads=num_heads,
             head_size=head_size,

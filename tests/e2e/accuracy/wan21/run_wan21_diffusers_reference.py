@@ -90,7 +90,7 @@ def _diffusers_load_kwargs(dtype: torch.dtype) -> dict[str, Any]:
     max_memory: dict[int | str, int | str] = {
         "cpu": os.environ.get("WAN21_DIFFUSERS_MAX_CPU_MEMORY", "20GiB"),
     }
-    for device_idx in range(torch.cuda.device_count()):
+    for device_idx in range(torch.accelerator.device_count()):
         free_bytes, _ = torch.cuda.mem_get_info(device_idx)
         max_memory[device_idx] = int(free_bytes * 0.9)
     kwargs["max_memory"] = max_memory
@@ -118,9 +118,7 @@ class _IdentityFtfy:
 
 
 def _ensure_wan_ftfy_fallback() -> None:
-    from diffusers.pipelines.wan import pipeline_wan
-    from diffusers.pipelines.wan import pipeline_wan_i2v
-    from diffusers.pipelines.wan import pipeline_wan_vace
+    from diffusers.pipelines.wan import pipeline_wan, pipeline_wan_i2v, pipeline_wan_vace
 
     for module in (pipeline_wan, pipeline_wan_i2v, pipeline_wan_vace):
         if not hasattr(module, "ftfy"):

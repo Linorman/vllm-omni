@@ -7,12 +7,8 @@ import ast
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-ACCURACY_COMMON = (
-    PROJECT_ROOT / "tests" / "e2e" / "accuracy" / "wan21" / "wan21_video_similarity_common.py"
-)
-ACCURACY_TEST = (
-    PROJECT_ROOT / "tests" / "e2e" / "accuracy" / "wan21" / "test_wan21_video_similarity.py"
-)
+ACCURACY_COMMON = PROJECT_ROOT / "tests" / "e2e" / "accuracy" / "wan21" / "wan21_video_similarity_common.py"
+ACCURACY_TEST = PROJECT_ROOT / "tests" / "e2e" / "accuracy" / "wan21" / "test_wan21_video_similarity.py"
 BUILDKITE_NIGHTLY = PROJECT_ROOT / ".buildkite" / "test-nightly.yml"
 MODEL_ASSETS = PROJECT_ROOT / "tests" / "e2e" / "accuracy" / "wan21" / "MODEL_ASSETS.md"
 SUPPORTED_MODELS = PROJECT_ROOT / "docs" / "models" / "supported_models.md"
@@ -40,9 +36,7 @@ ACCURACY_CASE_MODEL_PAIRS = (
     ("MODEL_VACE_14B", "vace_14b_reference_image"),
 )
 
-RELEASE_GATE_MODEL_NAMES = tuple(
-    model_constant for model_constant, _ in ACCURACY_CASE_MODEL_PAIRS
-)
+RELEASE_GATE_MODEL_NAMES = tuple(model_constant for model_constant, _ in ACCURACY_CASE_MODEL_PAIRS)
 
 NIGHTLY_SMOKE_CASE_IDS = (
     "t2v_13b_cache_dit_layerwise_offload",
@@ -83,11 +77,7 @@ def _string_constants(module: ast.Module) -> dict[str, str]:
                     constants[target.id] = node.value.value
         elif isinstance(node, ast.AnnAssign):
             value = node.value
-            if (
-                isinstance(node.target, ast.Name)
-                and isinstance(value, ast.Constant)
-                and isinstance(value.value, str)
-            ):
+            if isinstance(node.target, ast.Name) and isinstance(value, ast.Constant) and isinstance(value.value, str):
                 constants[node.target.id] = value.value
 
     return constants
@@ -113,9 +103,7 @@ def _wan21_case_model_pairs(module: ast.Module) -> set[tuple[str, str]]:
     if value is None:
         return set()
 
-    assert isinstance(
-        value, (ast.List, ast.Tuple)
-    ), "WAN21_CASE_SPECS must be a list/tuple literal"
+    assert isinstance(value, (ast.List, ast.Tuple)), "WAN21_CASE_SPECS must be a list/tuple literal"
 
     pairs: set[tuple[str, str]] = set()
     for element in value.elts:
@@ -123,12 +111,10 @@ def _wan21_case_model_pairs(module: ast.Module) -> set[tuple[str, str]]:
         assert len(element.elts) >= 2, "WAN21_CASE_SPECS entries must include model and case id"
 
         model_constant, case_id = element.elts[:2]
-        assert isinstance(
-            model_constant, ast.Name
-        ), "WAN21_CASE_SPECS model must be a constant name"
-        assert (
-            isinstance(case_id, ast.Constant) and isinstance(case_id.value, str)
-        ), "WAN21_CASE_SPECS case id must be a string literal"
+        assert isinstance(model_constant, ast.Name), "WAN21_CASE_SPECS model must be a constant name"
+        assert isinstance(case_id, ast.Constant) and isinstance(case_id.value, str), (
+            "WAN21_CASE_SPECS case id must be a string literal"
+        )
         pairs.add((model_constant.id, case_id.value))
 
     return pairs
@@ -152,8 +138,7 @@ def _wan21_accuracy_command_index(source: str) -> tuple[int, str]:
     commands = [
         (index, line.strip())
         for index, line in enumerate(source.splitlines())
-        if "python -m pytest" in line
-        and "tests/e2e/accuracy/wan21/test_wan21_video_similarity.py" in line
+        if "python -m pytest" in line and "tests/e2e/accuracy/wan21/test_wan21_video_similarity.py" in line
     ]
 
     assert commands, "missing Wan2.1 accuracy command"
@@ -163,9 +148,7 @@ def _wan21_accuracy_command_index(source: str) -> tuple[int, str]:
 
 def _pytest_k_selector(command: str) -> str:
     marker = ' -k "'
-    assert marker in command, (
-        f"Wan2.1 nightly smoke command is missing pytest -k selector: {command!r}"
-    )
+    assert marker in command, f"Wan2.1 nightly smoke command is missing pytest -k selector: {command!r}"
     return command.split(marker, 1)[1].split('"', 1)[0]
 
 
@@ -176,18 +159,12 @@ def _or_selector_terms(selector: str) -> set[str]:
 def _assert_exact_set(actual, expected, label: str) -> None:
     missing = expected - actual
     extra = actual - expected
-    assert actual == expected, (
-        f"{label} mismatch; missing={sorted(missing)!r}; extra={sorted(extra)!r}"
-    )
+    assert actual == expected, f"{label} mismatch; missing={sorted(missing)!r}; extra={sorted(extra)!r}"
 
 
 def test_wan21_release_gate_includes_all_official_diffusers_models():
     module = _parse_python(ACCURACY_COMMON)
-    model_ids = {
-        value
-        for name, value in _string_constants(module).items()
-        if name.startswith("MODEL_")
-    }
+    model_ids = {value for name, value in _string_constants(module).items() if name.startswith("MODEL_")}
     release_gate_names = _name_tuple(module, "RELEASE_GATE_MODELS")
 
     _assert_exact_set(
@@ -229,22 +206,12 @@ def test_wan21_nightly_accuracy_prepares_default_image_assets():
     lines = source.splitlines()
     accuracy_index, accuracy_command = _wan21_accuracy_command_index(source)
     preceding_command = next(
-        (
-            line.strip()
-            for line in reversed(lines[:accuracy_index])
-            if line.strip().startswith("- ")
-        ),
+        (line.strip() for line in reversed(lines[:accuracy_index]) if line.strip().startswith("- ")),
         "",
     )
 
-    assert (
-        f'WAN21_IMAGE_SOURCE="${{WAN21_IMAGE_SOURCE:-{CI_WAN21_IMAGE_SOURCE}}}"'
-        in accuracy_command
-    )
-    assert (
-        f'WAN21_LAST_IMAGE_SOURCE="${{WAN21_LAST_IMAGE_SOURCE:-{CI_WAN21_LAST_IMAGE_SOURCE}}}"'
-        in accuracy_command
-    )
+    assert f'WAN21_IMAGE_SOURCE="${{WAN21_IMAGE_SOURCE:-{CI_WAN21_IMAGE_SOURCE}}}"' in accuracy_command
+    assert f'WAN21_LAST_IMAGE_SOURCE="${{WAN21_LAST_IMAGE_SOURCE:-{CI_WAN21_LAST_IMAGE_SOURCE}}}"' in accuracy_command
     assert preceding_command.startswith("- python -c ")
     assert f'Path("{CI_WAN21_ASSET_DIR}")' in preceding_command
     assert "out.mkdir(parents=True, exist_ok=True)" in preceding_command

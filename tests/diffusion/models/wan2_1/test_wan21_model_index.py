@@ -11,36 +11,13 @@ from types import SimpleNamespace
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-WAN21_MODEL_INDEX = (
-    PROJECT_ROOT / "vllm_omni" / "diffusion" / "models" / "wan2_1" / "model_index.py"
-)
-WAN21_COMMON = (
-    PROJECT_ROOT
-    / "vllm_omni"
-    / "diffusion"
-    / "models"
-    / "wan2_1"
-    / "pipeline_wan2_1_common.py"
-)
-TEXT_TO_VIDEO_CURL = (
-    PROJECT_ROOT / "examples" / "online_serving" / "text_to_video" / "run_curl_text_to_video.sh"
-)
-TEXT_TO_VIDEO_SERVER = (
-    PROJECT_ROOT / "examples" / "online_serving" / "text_to_video" / "run_server.sh"
-)
-TEXT_TO_VIDEO_README = (
-    PROJECT_ROOT / "examples" / "online_serving" / "text_to_video" / "README.md"
-)
-IMAGE_TO_VIDEO_CURL = (
-    PROJECT_ROOT
-    / "examples"
-    / "online_serving"
-    / "image_to_video"
-    / "run_curl_image_to_video.sh"
-)
-VACE_EXAMPLE = (
-    PROJECT_ROOT / "examples" / "offline_inference" / "vace" / "vace_video_generation.py"
-)
+WAN21_MODEL_INDEX = PROJECT_ROOT / "vllm_omni" / "diffusion" / "models" / "wan2_1" / "model_index.py"
+WAN21_COMMON = PROJECT_ROOT / "vllm_omni" / "diffusion" / "models" / "wan2_1" / "pipeline_wan2_1_common.py"
+TEXT_TO_VIDEO_CURL = PROJECT_ROOT / "examples" / "online_serving" / "text_to_video" / "run_curl_text_to_video.sh"
+TEXT_TO_VIDEO_SERVER = PROJECT_ROOT / "examples" / "online_serving" / "text_to_video" / "run_server.sh"
+TEXT_TO_VIDEO_README = PROJECT_ROOT / "examples" / "online_serving" / "text_to_video" / "README.md"
+IMAGE_TO_VIDEO_CURL = PROJECT_ROOT / "examples" / "online_serving" / "image_to_video" / "run_curl_image_to_video.sh"
+VACE_EXAMPLE = PROJECT_ROOT / "examples" / "offline_inference" / "vace" / "vace_video_generation.py"
 VACE_README = PROJECT_ROOT / "examples" / "offline_inference" / "vace" / "vace_video_generation.md"
 
 _MODEL_INDEX_SPEC = importlib.util.spec_from_file_location(
@@ -87,11 +64,7 @@ def _load_common_flow_shift_helpers():
                 names=[ast.alias(name="annotations")],
                 level=0,
             ),
-            *[
-                node
-                for node in tree.body
-                if isinstance(node, ast.FunctionDef) and node.name in wanted
-            ],
+            *[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted],
         ],
         type_ignores=[],
     )
@@ -117,10 +90,7 @@ def _class_method_def(path: Path, class_name: str, method_name: str) -> ast.Func
 
 @pytest.mark.parametrize("model", OFFICIAL_T2V_IDS)
 def test_official_wan21_t2v_ids_resolve_to_t2v_pipeline(model: str):
-    assert (
-        resolve_wan21_pipeline_class_name(model, {"_class_name": "WanPipeline"})
-        == WAN21_T2V_PIPELINE
-    )
+    assert resolve_wan21_pipeline_class_name(model, {"_class_name": "WanPipeline"}) == WAN21_T2V_PIPELINE
 
 
 @pytest.mark.parametrize("model", OFFICIAL_I2V_IDS)
@@ -152,10 +122,7 @@ def test_official_wan21_flf2v_id_resolves_before_generic_i2v():
 
 @pytest.mark.parametrize("model", OFFICIAL_VACE_IDS)
 def test_official_wan21_vace_ids_resolve_to_vace_pipeline(model: str):
-    assert (
-        resolve_wan21_pipeline_class_name(model, {"_class_name": "WanVACEPipeline"})
-        == WAN21_VACE_PIPELINE
-    )
+    assert resolve_wan21_pipeline_class_name(model, {"_class_name": "WanVACEPipeline"}) == WAN21_VACE_PIPELINE
 
 
 @pytest.mark.parametrize(

@@ -140,6 +140,7 @@ def resolve_wan21_pipeline_class_name(
         return WAN21_VACE_PIPELINE
     return None
 
+
 __all__ = [
     "WAN21_T2V_PIPELINE",
     "WAN21_I2V_PIPELINE",

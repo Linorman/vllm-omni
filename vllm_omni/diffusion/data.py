@@ -887,10 +887,9 @@ class OmniDiffusionConfig:
                         resolve_wan21_pipeline_class_name,
                     )
 
-                    self.model_class_name = (
-                        resolve_wan21_pipeline_class_name(self.model, config_dict, tf_config_dict)
-                        or config_dict.get("_class_name", None)
-                    )
+                    self.model_class_name = resolve_wan21_pipeline_class_name(
+                        self.model, config_dict, tf_config_dict
+                    ) or config_dict.get("_class_name", None)
                 self.update_multimodal_support()
 
                 # Skip transformer config loading for diffusers adapter

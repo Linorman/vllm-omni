@@ -201,8 +201,7 @@ def resolve_wan21_sample_solver(
     sample_solver = str(raw).strip().lower()
     if sample_solver not in WAN21_SAMPLE_SOLVER_CHOICES:
         raise ValueError(
-            f"Invalid Wan2.1 sample_solver={raw!r}. "
-            f"Expected one of: {sorted(WAN21_SAMPLE_SOLVER_CHOICES)}"
+            f"Invalid Wan2.1 sample_solver={raw!r}. Expected one of: {sorted(WAN21_SAMPLE_SOLVER_CHOICES)}"
         )
     return sample_solver
 
@@ -231,9 +230,7 @@ def _wan21_has_unsupported_guidance_scale_2(req: OmniDiffusionRequest) -> bool:
         return False
 
     try:
-        return abs(
-            float(guidance_scale_2) - float(req.sampling_params.guidance_scale)
-        ) > 1e-6
+        return abs(float(guidance_scale_2) - float(req.sampling_params.guidance_scale)) > 1e-6
     except (TypeError, ValueError):
         return True
 
@@ -355,9 +352,7 @@ def get_wan21_i2v_pre_process_func(od_config: OmniDiffusionConfig):
                 continue
             if isinstance(raw_image, list):
                 if len(raw_image) != 1:
-                    logger.warning(
-                        "Wan2.1 I2V accepts a single image. Using the first image."
-                    )
+                    logger.warning("Wan2.1 I2V accepts a single image. Using the first image.")
                 raw_image = raw_image[0]
             if not isinstance(raw_image, (str, PIL.Image.Image)):
                 raise TypeError(
@@ -397,15 +392,9 @@ def _normalize_wan21_flf2v_images(
 
     if isinstance(raw_image, list):
         if raw_last_image is not None:
-            raise ValueError(
-                "Wan2.1 FLF2V accepts either image as [first, last] or last_image, "
-                "not both."
-            )
+            raise ValueError("Wan2.1 FLF2V accepts either image as [first, last] or last_image, not both.")
         if len(raw_image) != 2:
-            raise ValueError(
-                "Wan2.1 FLF2V image list must contain exactly two images: "
-                "[first, last]."
-            )
+            raise ValueError("Wan2.1 FLF2V image list must contain exactly two images: [first, last].")
         first_raw_image = raw_image[0]
         last_raw_image = raw_image[1]
     else:
@@ -436,10 +425,7 @@ def _prepare_wan21_flf2v_image_embeds(
     prompt_batch_size: int,
 ) -> torch.Tensor:
     if image_embeds.ndim != 3:
-        raise ValueError(
-            "Wan2.1 FLF2V image_embeds must be a 3D tensor with shape [2, S, D] "
-            "or [2B, S, D]."
-        )
+        raise ValueError("Wan2.1 FLF2V image_embeds must be a 3D tensor with shape [2, S, D] or [2B, S, D].")
 
     image_batch_size = image_embeds.shape[0]
     expanded_image_batch_size = prompt_batch_size * 2
@@ -626,9 +612,7 @@ class Wan21PipelineBase(
 
         self._sample_solver = "unipc"
         self._flow_shift = (
-            od_config.flow_shift
-            if od_config.flow_shift is not None
-            else resolve_wan21_default_flow_shift(self.model)
+            od_config.flow_shift if od_config.flow_shift is not None else resolve_wan21_default_flow_shift(self.model)
         )
         self.scheduler = build_wan21_scheduler(self._flow_shift)
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal
@@ -703,10 +687,7 @@ class Wan21PipelineBase(
         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
         prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
         prompt_embeds = torch.stack(
-            [
-                torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))])
-                for u in prompt_embeds
-            ],
+            [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds],
             dim=0,
         )
         _, seq_len, _ = prompt_embeds.shape
@@ -733,9 +714,7 @@ class Wan21PipelineBase(
                 mask_neg.to(device),
             ).last_hidden_state
             negative_prompt_embeds = negative_prompt_embeds.to(dtype=dtype, device=device)
-            negative_prompt_embeds = [
-                u[:v] for u, v in zip(negative_prompt_embeds, seq_lens_neg)
-            ]
+            negative_prompt_embeds = [u[:v] for u, v in zip(negative_prompt_embeds, seq_lens_neg)]
             negative_prompt_embeds = torch.stack(
                 [
                     torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))])
@@ -778,9 +757,7 @@ class Wan21PipelineBase(
             int(width) // self.vae_scale_factor_spatial,
         )
         if isinstance(generator, list) and len(generator) != batch_size:
-            raise ValueError(
-                f"Generator list length {len(generator)} does not match batch size {batch_size}."
-            )
+            raise ValueError(f"Generator list length {len(generator)} does not match batch size {batch_size}.")
         return randn_tensor(shape, generator=generator, device=device, dtype=dtype)
 
     def predict_noise(
@@ -895,15 +872,9 @@ class Wan21PipelineBase(
             raise ValueError("Wan2.1 currently supports a single prompt per request.")
         first_prompt = req.prompts[0]
         prompt = _prompt_text(first_prompt) if prompt is None else prompt
-        negative_prompt = (
-            _negative_prompt_text(first_prompt) if negative_prompt is None else negative_prompt
-        )
+        negative_prompt = _negative_prompt_text(first_prompt) if negative_prompt is None else negative_prompt
         if not isinstance(first_prompt, str):
-            prompt_embeds = (
-                prompt_embeds
-                if prompt_embeds is not None
-                else first_prompt.get("prompt_embeds")
-            )
+            prompt_embeds = prompt_embeds if prompt_embeds is not None else first_prompt.get("prompt_embeds")
             negative_prompt_embeds = (
                 negative_prompt_embeds
                 if negative_prompt_embeds is not None
@@ -966,8 +937,7 @@ class Wan21PipelineBase(
                 )
             elif do_cfg:
                 raise ValueError(
-                    "negative_prompt_embeds must be provided when prompt_embeds are "
-                    "given and guidance_scale > 1."
+                    "negative_prompt_embeds must be provided when prompt_embeds are given and guidance_scale > 1."
                 )
 
         self.scheduler.set_timesteps(num_steps, device=self.device)
@@ -1206,9 +1176,7 @@ class Wan21I2VPipelineBase(Wan21PipelineBase, SupportImageInput):
         multi_modal_data = _multi_modal_data(req.prompts[0]) or {}
         raw_image = multi_modal_data.get("image")
         if raw_image is None:
-            raise ValueError(
-                "Wan2.1 I2V requires an image; image_embeds alone are not sufficient."
-            )
+            raise ValueError("Wan2.1 I2V requires an image; image_embeds alone are not sufficient.")
         if isinstance(raw_image, list):
             raw_image = raw_image[0]
         image = cast(PIL.Image.Image | torch.Tensor, raw_image)
@@ -1449,15 +1417,9 @@ class Wan21FLF2VPipelineBase(Wan21I2VPipelineBase):
         raw_last_image = multi_modal_data.get("last_image")
         if isinstance(raw_image, list):
             if raw_last_image is not None:
-                raise ValueError(
-                    "Wan2.1 FLF2V accepts either image as [first, last] or last_image, "
-                    "not both."
-                )
+                raise ValueError("Wan2.1 FLF2V accepts either image as [first, last] or last_image, not both.")
             if len(raw_image) != 2:
-                raise ValueError(
-                    "Wan2.1 FLF2V image list must contain exactly two images: "
-                    "[first, last]."
-                )
+                raise ValueError("Wan2.1 FLF2V image list must contain exactly two images: [first, last].")
             raw_image, raw_last_image = raw_image
         if raw_image is None or raw_last_image is None:
             raise ValueError("Wan2.1 FLF2V requires both first and last images.")
@@ -1662,16 +1624,8 @@ class Wan21VACEPipelineBase(Wan21PipelineBase, SupportImageInput):
         for mask_, ref_batch in zip(mask, reference_images):
             _, num_frames, height, width = mask_.shape
             new_num_frames = (num_frames + self.vae_scale_factor_temporal - 1) // self.vae_scale_factor_temporal
-            new_height = (
-                height
-                // (self.vae_scale_factor_spatial * transformer_patch_size)
-                * transformer_patch_size
-            )
-            new_width = (
-                width
-                // (self.vae_scale_factor_spatial * transformer_patch_size)
-                * transformer_patch_size
-            )
+            new_height = height // (self.vae_scale_factor_spatial * transformer_patch_size) * transformer_patch_size
+            new_width = width // (self.vae_scale_factor_spatial * transformer_patch_size) * transformer_patch_size
             mask_ = mask_[0, :, :, :]
             mask_ = mask_.view(
                 num_frames,

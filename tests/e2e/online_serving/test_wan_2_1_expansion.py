@@ -119,16 +119,11 @@ def test_wan_2_1_t2v_i2v_flf2v_features(
     }
 
     if input_mode == "image":
-        request_config["image_reference"] = (
-            f"data:image/jpeg;base64,{generate_synthetic_image(320, 480)['base64']}"
-        )
+        request_config["image_reference"] = f"data:image/jpeg;base64,{generate_synthetic_image(320, 480)['base64']}"
     elif input_mode == "two_images":
-        request_config["image_reference"] = (
-            f"data:image/jpeg;base64,{generate_synthetic_image(320, 480)['base64']}"
-        )
+        request_config["image_reference"] = f"data:image/jpeg;base64,{generate_synthetic_image(320, 480)['base64']}"
         request_config["last_image_reference"] = (
-            "data:image/jpeg;base64,"
-            f"{generate_synthetic_image(320, 480, color=(64, 128, 255))['base64']}"
+            f"data:image/jpeg;base64,{generate_synthetic_image(320, 480, color=(64, 128, 255))['base64']}"
         )
 
     result = openai_client.send_video_diffusion_request(request_config)[0]

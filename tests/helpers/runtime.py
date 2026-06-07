@@ -2087,9 +2087,7 @@ class OpenAIClientHandler:
                     content_type,
                 )
             else:
-                normalized_form_data["last_image_reference"] = json.dumps(
-                    {"image_url": last_image_reference}
-                )
+                normalized_form_data["last_image_reference"] = json.dumps({"image_url": last_image_reference})
 
         result = DiffusionResponse()
         create_url = self._build_url("/v1/videos")

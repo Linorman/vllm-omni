@@ -102,8 +102,7 @@ class VideoGenerationRequest(BaseModel):
     last_image_reference: ImageReference | None = Field(
         default=None,
         description=(
-            "Optional JSON-safe last-frame image reference that guides generation. "
-            "Provide either image_url or file_id."
+            "Optional JSON-safe last-frame image reference that guides generation. Provide either image_url or file_id."
         ),
     )
 

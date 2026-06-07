@@ -269,9 +269,7 @@ class WanImageEmbedding(nn.Module):
             encoder_hidden_states_image = encoder_hidden_states_image.view(-1, 2 * seq_len, embed_dim)
             encoder_hidden_states_image = encoder_hidden_states_image + self.pos_embed
 
-        hidden_states = self.norm1(encoder_hidden_states_image.float()).type_as(
-            encoder_hidden_states_image
-        )
+        hidden_states = self.norm1(encoder_hidden_states_image.float()).type_as(encoder_hidden_states_image)
         hidden_states = self.ff(hidden_states)
         hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
         return hidden_states
