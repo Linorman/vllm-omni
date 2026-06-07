@@ -540,6 +540,17 @@ def test_wan21_does_not_reject_request_default_guidance_scale_2_autofill():
     )
 
 
+def test_wan21_prepare_forward_resets_scheduler_begin_index_like_diffusers():
+    prepare_forward = _function_def(WAN21_COMMON, "_prepare_common_forward")
+    source = ast.get_source_segment(_source(WAN21_COMMON), prepare_forward) or ""
+
+    assert "self.scheduler.set_timesteps(num_steps, device=self.device)" in source
+    assert "self.scheduler.set_begin_index(0)" in source
+    assert source.index("self.scheduler.set_timesteps(num_steps, device=self.device)") < source.index(
+        "self.scheduler.set_begin_index(0)"
+    )
+
+
 def test_wan21_i2v_requires_raw_image_for_vae_conditioning():
     source = _source(WAN21_COMMON)
     assert "raw_image is None and image_embeds is None" not in source

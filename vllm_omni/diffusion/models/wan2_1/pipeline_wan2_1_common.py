@@ -971,6 +971,7 @@ class Wan21PipelineBase(
                 )
 
         self.scheduler.set_timesteps(num_steps, device=self.device)
+        self.scheduler.set_begin_index(0)
         timesteps = self.scheduler.timesteps
         self._num_timesteps = len(timesteps)
 

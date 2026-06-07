@@ -9,6 +9,7 @@ from base64 import b64decode, b64encode
 from hashlib import sha1
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,6 +24,16 @@ from tests.e2e.accuracy.helpers import (
     probe_binary,
     probe_video,
     validate_image_source,
+)
+from tests.e2e.accuracy.wan21.run_wan21_diffusers_reference import (
+    _cast_pipeline_modules,
+    _diffusers_load_kwargs,
+    _ensure_wan_ftfy_fallback,
+    _extract_frames,
+    _frame_count,
+    _IdentityFtfy,
+    _pipeline_execution_device,
+    _set_scheduler_flow_shift,
 )
 from tests.e2e.accuracy.wan21.wan21_video_similarity_common import (
     CONDITIONING_SCALE,
@@ -337,6 +348,115 @@ def test_add_reference_file_materializes_data_url() -> None:
     assert filename == "reference.png"
     assert content_type == "image/png"
     assert len(payload.getvalue()) > 0
+
+
+def test_ensure_wan21_ftfy_fallback_sets_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    from diffusers.pipelines.wan import pipeline_wan
+    from diffusers.pipelines.wan import pipeline_wan_i2v
+    from diffusers.pipelines.wan import pipeline_wan_vace
+
+    modules = [pipeline_wan, pipeline_wan_i2v, pipeline_wan_vace]
+    for module in modules:
+        monkeypatch.delattr(module, "ftfy", raising=False)
+
+    _ensure_wan_ftfy_fallback()
+
+    for module in modules:
+        assert hasattr(module, "ftfy")
+        assert isinstance(module.ftfy, _IdentityFtfy)
+        assert module.ftfy.fix_text("abc") == "abc"
+
+
+def test_frame_count_handles_numpy_array_frames() -> None:
+    frames = torch.zeros((2, 4, 4, 3), dtype=torch.uint8).numpy()
+
+    assert _frame_count(frames) == 2
+
+
+def test_extract_frames_accepts_numpy_array_result() -> None:
+    class Result:
+        frames = torch.zeros((2, 4, 4, 3), dtype=torch.uint8).numpy()
+
+    frames = _extract_frames(Result())
+
+    assert _frame_count(frames) == 2
+
+
+def test_extract_frames_squeezes_single_batch_numpy_result() -> None:
+    class Result:
+        frames = torch.zeros((1, 2, 4, 4, 3), dtype=torch.uint8).numpy()
+
+    frames = _extract_frames(Result())
+
+    assert frames.shape == (2, 4, 4, 3)
+    assert _frame_count(frames) == 2
+
+
+def test_set_scheduler_flow_shift_uses_wan21_online_scheduler() -> None:
+    from vllm_omni.diffusion.models.schedulers import FlowUniPCMultistepScheduler
+
+    pipe = SimpleNamespace(scheduler=SimpleNamespace(config={}))
+
+    _set_scheduler_flow_shift(pipe, 5.0)
+
+    assert isinstance(pipe.scheduler, FlowUniPCMultistepScheduler)
+    assert pipe.scheduler.config.shift == 5.0
+    assert pipe.scheduler.config.prediction_type == "flow_prediction"
+
+
+def test_diffusers_load_kwargs_defaults_to_cuda_device_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WAN21_DIFFUSERS_DEVICE_MAP", raising=False)
+    monkeypatch.delenv("WAN21_DIFFUSERS_MAX_CPU_MEMORY", raising=False)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (1000 + device, 2000))
+
+    kwargs = _diffusers_load_kwargs(torch.bfloat16)
+
+    assert kwargs["torch_dtype"] is torch.bfloat16
+    assert kwargs["device_map"] == "balanced"
+    assert kwargs["max_memory"] == {"cpu": "20GiB", 0: 900, 1: 900}
+
+
+def test_diffusers_load_kwargs_can_disable_device_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WAN21_DIFFUSERS_DEVICE_MAP", "off")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    assert _diffusers_load_kwargs(torch.float32) == {"torch_dtype": torch.float32}
+
+
+def test_pipeline_execution_device_prefers_diffusers_execution_device() -> None:
+    pipe = SimpleNamespace(_execution_device=torch.device("cuda:1"))
+
+    assert _pipeline_execution_device(pipe, "cuda") == torch.device("cuda:1")
+
+
+def test_pipeline_execution_device_uses_fallback_without_device_map() -> None:
+    assert _pipeline_execution_device(SimpleNamespace(), "cpu") == torch.device("cpu")
+
+
+def test_cast_pipeline_modules_aligns_reference_component_dtypes() -> None:
+    class Module:
+        def __init__(self) -> None:
+            self.dtype = None
+
+        def to(self, *, dtype: torch.dtype) -> None:
+            self.dtype = dtype
+
+    pipe = SimpleNamespace(
+        transformer=Module(),
+        transformer_2=None,
+        text_encoder=Module(),
+        image_encoder=Module(),
+        vae=Module(),
+    )
+
+    _cast_pipeline_modules(pipe, torch.bfloat16)
+
+    assert pipe.transformer.dtype is torch.bfloat16
+    assert pipe.text_encoder.dtype is torch.bfloat16
+    assert pipe.image_encoder.dtype is torch.bfloat16
+    assert pipe.vae.dtype is torch.bfloat16
 
 
 @pytest.mark.benchmark

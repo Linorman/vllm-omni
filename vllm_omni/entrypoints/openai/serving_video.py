@@ -140,6 +140,7 @@ class OmniOpenAIServingVideo:
             gen_params.num_inference_steps = request.num_inference_steps
         if "guidance_scale" in provided_fields and request.guidance_scale is not None:
             gen_params.guidance_scale = request.guidance_scale
+            gen_params.guidance_scale_provided = True
         if "guidance_scale_2" in provided_fields and request.guidance_scale_2 is not None:
             gen_params.guidance_scale_2 = request.guidance_scale_2
         if "true_cfg_scale" in provided_fields and request.true_cfg_scale is not None:

@@ -42,9 +42,8 @@ from vllm_omni.diffusion.distributed.sp_plan import (
 )
 from vllm_omni.diffusion.forward_context import get_forward_context
 from vllm_omni.diffusion.layers.adalayernorm import AdaLayerNorm
-from vllm_omni.diffusion.layers.norm import LayerNorm, RMSNorm
+from vllm_omni.diffusion.layers.norm import LayerNorm
 from vllm_omni.diffusion.layers.rope import RotaryEmbeddingWan
-from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
 
@@ -173,22 +172,38 @@ class WanRotaryPosEmbed(nn.Module):
         self.attention_head_dim = attention_head_dim
         self.patch_size = patch_size
         self.max_seq_len = max_seq_len
+        self.theta = theta
 
         # Split dimensions for temporal, height, width
         h_dim = w_dim = 2 * (attention_head_dim // 6)
         t_dim = attention_head_dim - h_dim - w_dim
-        freqs_dtype = torch.float64 if current_omni_platform.supports_float64() else torch.float32
+        self.t_dim = t_dim
+        self.h_dim = h_dim
+        self.w_dim = w_dim
+
+        freqs_cos, freqs_sin = self._build_freqs()
+        self.register_buffer("freqs_cos", freqs_cos, persistent=False)
+        self.register_buffer("freqs_sin", freqs_sin, persistent=False)
+
+    def _build_freqs(self) -> tuple[torch.Tensor, torch.Tensor]:
+        freqs_dtype = torch.float64
+        buffer_dtype = torch.get_default_dtype()
 
         freqs_cos = []
         freqs_sin = []
 
-        for dim in [t_dim, h_dim, w_dim]:
-            freq_cos, freq_sin = self._get_1d_rotary_pos_embed(dim, max_seq_len, theta, freqs_dtype)
+        for dim in [self.t_dim, self.h_dim, self.w_dim]:
+            freq_cos, freq_sin = self._get_1d_rotary_pos_embed(
+                dim,
+                self.max_seq_len,
+                self.theta,
+                freqs_dtype,
+                buffer_dtype,
+            )
             freqs_cos.append(freq_cos)
             freqs_sin.append(freq_sin)
 
-        self.register_buffer("freqs_cos", torch.cat(freqs_cos, dim=1), persistent=False)
-        self.register_buffer("freqs_sin", torch.cat(freqs_sin, dim=1), persistent=False)
+        return torch.cat(freqs_cos, dim=1), torch.cat(freqs_sin, dim=1)
 
     @staticmethod
     def _get_1d_rotary_pos_embed(
@@ -196,26 +211,23 @@ class WanRotaryPosEmbed(nn.Module):
         max_seq_len: int,
         theta: float,
         freqs_dtype: torch.dtype,
+        buffer_dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Generate 1D rotary position embeddings."""
         freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=freqs_dtype) / dim))
         t = torch.arange(max_seq_len, dtype=freqs_dtype)
         freqs = torch.outer(t, freqs)
         # Repeat interleave for real representation
-        freqs_cos = freqs.cos().float().repeat_interleave(2, dim=-1)
-        freqs_sin = freqs.sin().float().repeat_interleave(2, dim=-1)
-        return freqs_cos.float(), freqs_sin.float()
+        freqs_cos = freqs.cos().to(buffer_dtype).repeat_interleave(2, dim=-1)
+        freqs_sin = freqs.sin().to(buffer_dtype).repeat_interleave(2, dim=-1)
+        return freqs_cos, freqs_sin
 
     def forward(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
         p_t, p_h, p_w = self.patch_size
         ppf, pph, ppw = num_frames // p_t, height // p_h, width // p_w
 
-        split_sizes = [
-            self.attention_head_dim - 2 * (self.attention_head_dim // 3),
-            self.attention_head_dim // 3,
-            self.attention_head_dim // 3,
-        ]
+        split_sizes = [self.t_dim, self.h_dim, self.w_dim]
 
         freqs_cos = self.freqs_cos.split(split_sizes, dim=1)
         freqs_sin = self.freqs_sin.split(split_sizes, dim=1)
@@ -231,7 +243,10 @@ class WanRotaryPosEmbed(nn.Module):
         freqs_cos = torch.cat([freqs_cos_f, freqs_cos_h, freqs_cos_w], dim=-1).reshape(1, ppf * pph * ppw, 1, -1)
         freqs_sin = torch.cat([freqs_sin_f, freqs_sin_h, freqs_sin_w], dim=-1).reshape(1, ppf * pph * ppw, 1, -1)
 
-        return freqs_cos.to(hidden_states.device), freqs_sin.to(hidden_states.device)
+        return (
+            freqs_cos.to(device=hidden_states.device),
+            freqs_sin.to(device=hidden_states.device),
+        )
 
 
 class WanImageEmbedding(nn.Module):
@@ -240,9 +255,9 @@ class WanImageEmbedding(nn.Module):
     def __init__(self, in_features: int, out_features: int, pos_embed_seq_len: int | None = None):
         super().__init__()
 
-        self.norm1 = LayerNorm(in_features)
+        self.norm1 = LayerNorm(in_features, eps=1e-5)
         self.ff = FeedForward(in_features, out_features, mult=1, activation_fn="gelu")
-        self.norm2 = LayerNorm(out_features)
+        self.norm2 = LayerNorm(out_features, eps=1e-5)
         if pos_embed_seq_len is not None:
             self.pos_embed = nn.Parameter(torch.zeros(1, pos_embed_seq_len, in_features))
         else:
@@ -254,9 +269,11 @@ class WanImageEmbedding(nn.Module):
             encoder_hidden_states_image = encoder_hidden_states_image.view(-1, 2 * seq_len, embed_dim)
             encoder_hidden_states_image = encoder_hidden_states_image + self.pos_embed
 
-        hidden_states = self.norm1(encoder_hidden_states_image)
+        hidden_states = self.norm1(encoder_hidden_states_image.float()).type_as(
+            encoder_hidden_states_image
+        )
         hidden_states = self.ff(hidden_states)
-        hidden_states = self.norm2(hidden_states)
+        hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
         return hidden_states
 
 
@@ -380,6 +397,7 @@ class WanSelfAttention(nn.Module):
             quant_config=quant_config,
             prefix=f"{prefix}.to_qkv" if prefix else "to_qkv",
         )
+        self.use_separate_qkv = quant_config is None
 
         self.num_heads = self.to_qkv.num_heads
         self.num_kv_heads = self.to_qkv.num_kv_heads
@@ -390,8 +408,8 @@ class WanSelfAttention(nn.Module):
             self.norm_q = DistributedRMSNorm(self.tp_inner_dim, eps=eps)
             self.norm_k = DistributedRMSNorm(self.tp_inner_dim, eps=eps)
         else:
-            self.norm_q = RMSNorm(self.tp_inner_dim, eps=eps)
-            self.norm_k = RMSNorm(self.tp_inner_dim, eps=eps)
+            self.norm_q = nn.RMSNorm(self.tp_inner_dim, eps=eps)
+            self.norm_k = nn.RMSNorm(self.tp_inner_dim, eps=eps)
 
         self.to_out = RowParallelLinear(
             self.inner_dim,
@@ -422,12 +440,27 @@ class WanSelfAttention(nn.Module):
         rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
         attn_metadata: AttentionMetadata | None = None,
     ) -> torch.Tensor:
-        # Fused QKV projection
-        qkv, _ = self.to_qkv(hidden_states)
-
         q_size = self.num_heads * self.head_dim
         kv_size = self.num_kv_heads * self.head_dim
-        query, key, value = qkv.split([q_size, kv_size, kv_size], dim=-1)
+        if self.use_separate_qkv:
+            weight = self.to_qkv.weight
+            bias = getattr(self.to_qkv, "bias", None)
+            query = F.linear(hidden_states, weight[:q_size], bias[:q_size] if bias is not None else None)
+            key = F.linear(
+                hidden_states,
+                weight[q_size : q_size + kv_size],
+                bias[q_size : q_size + kv_size] if bias is not None else None,
+            )
+            value = F.linear(
+                hidden_states,
+                weight[q_size + kv_size : q_size + 2 * kv_size],
+                bias[q_size + kv_size : q_size + 2 * kv_size] if bias is not None else None,
+            )
+            qkv = torch.cat([query, key, value], dim=-1)
+        else:
+            # Fused QKV projection
+            qkv, _ = self.to_qkv(hidden_states)
+            query, key, value = qkv.split([q_size, kv_size, kv_size], dim=-1)
 
         # Apply QK normalization
         query = self.norm_q(query)
@@ -440,12 +473,15 @@ class WanSelfAttention(nn.Module):
 
         # Apply rotary embeddings
         if rotary_emb is not None:
-            self.rotary_embedding = RotaryEmbeddingWan(is_neox_style=False, half_head_dim=True)
             freqs_cos, freqs_sin = rotary_emb
+            self.rotary_embedding = RotaryEmbeddingWan(
+                is_neox_style=False,
+                half_head_dim=True,
+                force_native=True,
+            )
             query = self.rotary_embedding(query, freqs_cos, freqs_sin)
             key = self.rotary_embedding(key, freqs_cos, freqs_sin)
 
-        # Compute attention using unified attention layer
         hidden_states = self.attn(query, key, value, attn_metadata)
         hidden_states = hidden_states.flatten(2, 3)
         hidden_states = hidden_states.type_as(query)
@@ -523,8 +559,8 @@ class WanCrossAttention(nn.Module):
             self.norm_q = DistributedRMSNorm(self.tp_inner_dim, eps=eps)
             self.norm_k = DistributedRMSNorm(self.tp_inner_dim, eps=eps)
         else:
-            self.norm_q = RMSNorm(self.tp_inner_dim, eps=eps)
-            self.norm_k = RMSNorm(self.tp_inner_dim, eps=eps)
+            self.norm_q = nn.RMSNorm(self.tp_inner_dim, eps=eps)
+            self.norm_k = nn.RMSNorm(self.tp_inner_dim, eps=eps)
 
         # Optional added KV projections for I2V (image embeddings)
         self.added_kv_proj_dim = added_kv_proj_dim
@@ -550,7 +586,7 @@ class WanCrossAttention(nn.Module):
             if get_tensor_model_parallel_world_size() > 1:
                 self.norm_added_k = DistributedRMSNorm(self.tp_inner_dim, eps=eps)
             else:
-                self.norm_added_k = RMSNorm(self.tp_inner_dim, eps=eps)
+                self.norm_added_k = nn.RMSNorm(self.tp_inner_dim, eps=eps)
         else:
             self.add_k_proj = None
             self.add_v_proj = None
@@ -628,7 +664,6 @@ class WanCrossAttention(nn.Module):
             hidden_states_img = hidden_states_img.flatten(2, 3)
             hidden_states_img = hidden_states_img.type_as(query)
 
-        # Main cross-attention using unified attention layer
         hidden_states = self.attn(query, key, value, attn_metadata)
         hidden_states = hidden_states.flatten(2, 3)
         hidden_states = hidden_states.type_as(query)
@@ -712,7 +747,7 @@ class WanTransformerBlock(nn.Module):
         if temb.ndim == 4:
             # temb: batch_size, seq_len, 6, inner_dim (wan2.2 ti2v)
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-                self.scale_shift_table.unsqueeze(0) + temb
+                self.scale_shift_table.unsqueeze(0) + temb.float()
             ).chunk(6, dim=2)
             shift_msa = shift_msa.squeeze(2)
             scale_msa = scale_msa.squeeze(2)
@@ -723,24 +758,24 @@ class WanTransformerBlock(nn.Module):
         else:
             # temb: batch_size, 6, inner_dim (wan2.1/wan2.2 14B)
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
-                self.scale_shift_table + temb
+                self.scale_shift_table + temb.float()
             ).chunk(6, dim=1)
 
         # 1. Self-attention
-        norm_hidden_states = self.norm1(hidden_states, scale_msa, shift_msa).type_as(hidden_states)
+        norm_hidden_states = self.norm1(hidden_states.float(), scale_msa, shift_msa).type_as(hidden_states)
         self_attn_metadata = AttentionMetadata(attn_mask=hidden_states_mask)
         attn_output = self.attn1(norm_hidden_states, rotary_emb, self_attn_metadata)
-        hidden_states = (hidden_states + attn_output * gate_msa).type_as(hidden_states)
+        hidden_states = (hidden_states.float() + attn_output * gate_msa).type_as(hidden_states)
 
         # 2. Cross-attention
-        norm_hidden_states = self.norm2(hidden_states).type_as(hidden_states)
+        norm_hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
         attn_output = self.attn2(norm_hidden_states, encoder_hidden_states, None)
         hidden_states = hidden_states + attn_output
 
         # 3. Feed-forward
-        norm_hidden_states = self.norm3(hidden_states, c_scale_msa, c_shift_msa).type_as(hidden_states)
+        norm_hidden_states = self.norm3(hidden_states.float(), c_scale_msa, c_shift_msa).type_as(hidden_states)
         ff_output = self.ffn(norm_hidden_states)
-        hidden_states = (hidden_states + ff_output * c_gate_msa).type_as(hidden_states)
+        hidden_states = (hidden_states.float() + ff_output.float() * c_gate_msa).type_as(hidden_states)
 
         return hidden_states
 
@@ -898,6 +933,7 @@ class Wan21Transformer3DModel(nn.Module):
                 kernel_size=patch_size,
                 stride=patch_size,
             )
+            self.patch_embedding.enable_linear = False
         else:
             self.patch_embedding = PPMissingLayer()
 
@@ -977,7 +1013,7 @@ class Wan21Transformer3DModel(nn.Module):
             rotary_emb = self._cached_rope_emb
         else:
             freqs_cos, freqs_sin = self.rope(hidden_states)
-            rotary_emb = (freqs_cos[..., 0::2].to(hidden_states.dtype), freqs_sin[..., 1::2].to(hidden_states.dtype))
+            rotary_emb = (freqs_cos[..., 0::2], freqs_sin[..., 1::2])
             self._hidden_states_shape = hidden_states.shape
             self._cached_rope_emb = rotary_emb
             self._cached_rope_resolution = current_rope_resolution
@@ -1052,7 +1088,7 @@ class Wan21Transformer3DModel(nn.Module):
             shift = shift.unsqueeze(1)
             scale = scale.unsqueeze(1)
 
-        hidden_states = self.norm_out(hidden_states, scale, shift).type_as(hidden_states)
+        hidden_states = self.norm_out(hidden_states.float(), scale, shift).type_as(hidden_states)
         hidden_states = self.proj_out(hidden_states)
 
         hidden_states = hidden_states.reshape(

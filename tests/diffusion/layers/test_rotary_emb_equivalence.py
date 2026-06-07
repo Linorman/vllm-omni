@@ -10,8 +10,12 @@ dtypes, ensuring the refactor is safe.
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 import torch
+
+from vllm_omni.diffusion.layers.rope import RotaryEmbeddingWan
 
 
 def _apply_rotary_emb_helios_original(
@@ -110,3 +114,16 @@ class TestHeliosRoPEEquivalence:
         freqs = torch.randn(1, 4, 126)
         with pytest.raises(RuntimeError):
             _apply_rotary_emb_helios_optimized(hidden, freqs)
+
+
+def test_wan_rotary_cuda_uses_native_path_for_mixed_rope_dtype() -> None:
+    init_source = inspect.getsource(RotaryEmbeddingWan.__init__)
+    source = inspect.getsource(RotaryEmbeddingWan.forward_cuda)
+
+    assert "force_native: bool = False" in init_source
+    assert "self.force_native = force_native" in init_source
+    assert "if self.force_native or x.dtype != cos.dtype or x.dtype != sin.dtype:" in source
+    assert "return self.forward_native(x, cos, sin)" in source
+    assert source.index("if self.force_native or x.dtype != cos.dtype or x.dtype != sin.dtype:") < source.index(
+        "from vllm.vllm_flash_attn.layers.rotary import apply_rotary_emb"
+    )

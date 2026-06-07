@@ -184,6 +184,8 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
 
         if sp_size > 1:
             vace_embeds = sp_shard(vace_embeds, dim=1)
+        # Match diffusers' effective layout before VACE proj_in/proj_out bf16 GEMMs.
+        vace_embeds = vace_embeds.contiguous()
         return vace_embeds
 
     def forward(
@@ -212,7 +214,7 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
             rotary_emb = self._cached_rope_emb
         else:
             freqs_cos, freqs_sin = self.rope(hidden_states)
-            rotary_emb = (freqs_cos[..., 0::2].to(hidden_states.dtype), freqs_sin[..., 1::2].to(hidden_states.dtype))
+            rotary_emb = (freqs_cos[..., 0::2], freqs_sin[..., 1::2])
             self._hidden_states_shape = hidden_states.shape
             self._cached_rope_emb = rotary_emb
             self._cached_rope_resolution = current_rope_resolution
@@ -325,7 +327,7 @@ class Wan21VACETransformer3DModel(Wan21Transformer3DModel):
             shift = shift.unsqueeze(1)
             scale = scale.unsqueeze(1)
 
-        hidden_states = self.norm_out(hidden_states, scale, shift).type_as(hidden_states)
+        hidden_states = self.norm_out(hidden_states.float(), scale, shift).type_as(hidden_states)
         hidden_states = self.proj_out(hidden_states)
 
         hidden_states = hidden_states.reshape(

@@ -202,9 +202,15 @@ class RotaryEmbeddingWan(RotaryEmbedding):
            of 1st half and 2nd half (GPT-NeoX style).
     """
 
-    def __init__(self, is_neox_style: bool = False, half_head_dim: bool = False) -> None:
+    def __init__(
+        self,
+        is_neox_style: bool = False,
+        half_head_dim: bool = False,
+        force_native: bool = False,
+    ) -> None:
         super().__init__(is_neox_style=is_neox_style)
         self.half_head_dim = half_head_dim
+        self.force_native = force_native
 
     def forward_cuda(
         self,
@@ -212,6 +218,9 @@ class RotaryEmbeddingWan(RotaryEmbedding):
         cos: torch.Tensor,
         sin: torch.Tensor,
     ) -> torch.Tensor:
+        if self.force_native or x.dtype != cos.dtype or x.dtype != sin.dtype:
+            return self.forward_native(x, cos, sin)
+
         from vllm.vllm_flash_attn.layers.rotary import apply_rotary_emb
 
         if cos.dim() > 2:

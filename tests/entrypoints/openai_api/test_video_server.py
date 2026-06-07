@@ -788,6 +788,28 @@ def test_negative_prompt_and_seed_pass_through(test_client, mocker: MockerFixtur
     assert captured_params.seed == 123
 
 
+def test_video_guidance_scale_marks_explicit_override(test_client, mocker: MockerFixture):
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        return_value=b"fake-video",
+    )
+    response = test_client.post(
+        "/v1/videos",
+        data={
+            "prompt": "high guidance",
+            "guidance_scale": "5.0",
+        },
+    )
+
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+    engine = test_client.app.state.openai_serving_video._engine_client
+    captured_params = engine.captured_sampling_params_list[0]
+    assert captured_params.guidance_scale == 5.0
+    assert captured_params.guidance_scale_provided is True
+
+
 def test_invalid_lora_returns_400(test_client):
     response = test_client.post(
         "/v1/videos",
