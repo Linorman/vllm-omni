@@ -45,9 +45,11 @@ The script allows overriding:
 - `MODEL` (default: `Wan-AI/Wan2.2-T2V-A14B-Diffusers`)
 - `PORT` (default: `8091`)
 - `BOUNDARY_RATIO` (default: unset for Wan2.1, `0.875` for Wan2.2)
-- `FLOW_SHIFT` (default: `5.0`)
+- `FLOW_SHIFT` (default: unset for Wan2.1 so the model-aware defaults apply; `5.0` for the default Wan2.2 server script path)
 - `CACHE_BACKEND` (default: `none`)
 - `ENABLE_CACHE_DIT_SUMMARY` (default: `0`)
+
+Wan2.1 uses model-aware flow-shift defaults when `FLOW_SHIFT` is not set: `3.0` for T2V/I2V-480P/VACE, `5.0` for I2V-720P, and `16.0` for FLF2V-720P.
 
 ## Async Job Behavior
 

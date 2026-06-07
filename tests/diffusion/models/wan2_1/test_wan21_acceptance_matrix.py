@@ -265,6 +265,6 @@ def test_wan21_model_assets_document_release_gate_models():
 def test_wan21_supported_models_document_scope_limits():
     source = SUPPORTED_MODELS.read_text(encoding="utf-8")
 
-    assert "official Wan2.1 Diffusers video/VACE checkpoint scope" in source
-    assert "does not claim a separate Wan2.1 S2V pipeline" in source
-    assert "does not claim a dedicated Wan2.1 image-generation endpoint" in source
+    assert "The Wan2.1 entries above cover the official Diffusers video/VACE checkpoint" in source
+    assert "They do not include Wan2.1 S2V or a Wan2.1" in source
+    assert "image-generation endpoint" in source

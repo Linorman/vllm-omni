@@ -147,6 +147,7 @@ The following tables show which models support each feature:
 | **Wan2.1 T2V/I2V/FLF2V**     |     ❌     |     ✅      |           ✅           |       ✅        |         ✅         |         ✅         |   ✅    |             ✅             |  ✅ (encode/decode)   |       ❌        |        ❌         |
 | **Wan2.2**                   |     ❌     |     ✅      |           ✅           |       ✅        |         ✅         |         ✅         |   ✅    |             ✅             |  ✅ (encode/decode)   |       ❌        |        ❌         |
 | **Wan2.1-VACE**              |     ❌     |     ✅      |           ✅           |       ✅        |         ✅         |         ✅         |   ✅    |             ✅             |  ✅ (encode/decode)   |       ❌        |        ❌         |
+| **Wan2.2-S2V**               |     ❌     |     ✅      |           ❌           |       ❌        |         ✅         |         ❌         |   ❌    |             ✅             |  ✅ (encode/decode)   |       ❌        |        ❌         |
 | **LTX-2**                    |     ❌     |     ✅      |           ✅           |       ✅        |         ✅         |         ❌         |   ✅    |             ✅             |          ❌           |       ❌        |        ❌         |
 | **LTX-2.3**                  |     ❌     |     ✅      |           ✅           |       ✅        |         ✅         |         ❌         |   ❌    |             ❌             |          ❌           |       ❌        |        ❌         |
 | **Helios**                   |     ❌     |     ✅      |           ✅           |       ✅        |         ✅         |         ❌         |   ✅    |             ✅             |          ❌           |       ❌        |        ❌         |
@@ -158,13 +159,10 @@ The following tables show which models support each feature:
 **Frame Interpolation Support**
 
 - **Supported**: Wan2.1 text-to-video, image-to-video, first-last-frame-to-video, VACE pipelines; Wan2.2 text-to-video, image-to-video, and TI2V pipelines
-- **Not supported**: LTX-2, LTX-2.3, Helios, HunyuanVideo-1.5, DreamID-Omni
+- **Not supported**: Wan2.2-S2V, LTX-2, LTX-2.3, Helios, HunyuanVideo-1.5, DreamID-Omni
 
-Wan2.1 default `flow_shift` is model-aware: 3.0 for T2V, I2V-480P, and VACE;
+Wan2.1 defaults `flow_shift` by checkpoint: 3.0 for T2V, I2V-480P, and VACE;
 5.0 for I2V-720P; 16.0 for FLF2V-720P.
-
-Wan2.1 support is validated by CPU pipeline behavior tests, online GPU smoke
-tests, and Diffusers similarity tests for the selected release-gate subset.
 
 ### AudioGen
 

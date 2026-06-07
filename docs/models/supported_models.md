@@ -37,7 +37,7 @@ th {
 | `Wan21VACEPipeline` | Wan2.1-VACE | `Wan-AI/Wan2.1-VACE-1.3B-diffusers`, `Wan-AI/Wan2.1-VACE-14B-diffusers` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
 | `WanPipeline` | Wan2.2-T2V, Wan2.2-TI2V | `Wan-AI/Wan2.2-T2V-A14B-Diffusers`, `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
 | `WanImageToVideoPipeline` | Wan2.2-I2V | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
-| `Cosmos3OmniDiffusersPipeline` | Cosmos3 T2I, T2V, I2V | `nvidia/Cosmos3-Nano` | ✅︎ | | | |
+| `Cosmos3OmniDiffusersPipeline` | Cosmos3 T2I, T2V, I2V, T2V with sound, action policy | `nvidia/Cosmos3-Nano` | ✅︎ | | | |
 | `WanSpeechToVideoPipeline` | Wan2.2-S2V | `Wan-AI/Wan2.2-S2V-14B` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
 | `LTX2Pipeline` | LTX-2-T2V | `Lightricks/LTX-2` | ✅︎ | ✅︎ | | |
 | `LTX2ImageToVideoPipeline` | LTX-2-I2V | `Lightricks/LTX-2` | ✅︎ | ✅︎ | | |
@@ -80,9 +80,9 @@ th {
 | `ErnieImagePipeline` | ERNIE-Image | `baidu/ERNIE-Image`, `baidu/ERNIE-Image-Turbo` | ✅︎ | ✅︎ | ✅︎ | ✅︎ |
 |`HiDreamImagePipeline` | HiDream-I1-Full | `HiDream-ai/HiDream-I1-Full` | ✅︎ | ✅︎ | | |
 
-Wan2.1 support covers the official Wan2.1 Diffusers video/VACE checkpoint scope
-listed above: T2V, I2V, FLF2V, and VACE. The table does not claim a separate Wan2.1 S2V pipeline
-and does not claim a dedicated Wan2.1 image-generation endpoint. Wan2.1 checkpoints use model-aware
-scheduler defaults; FLF2V requires both first and last image inputs.
+The Wan2.1 entries above cover the official Diffusers video/VACE checkpoint
+scope: T2V, I2V, FLF2V, and VACE. They do not include Wan2.1 S2V or a Wan2.1
+image-generation endpoint. Wan2.1 checkpoints use model-aware scheduler
+defaults, and FLF2V requires both first and last image inputs.
 
 ✅︎ indicates the model is supported on that backend. Empty cells mean not listed as supported on that backend.
