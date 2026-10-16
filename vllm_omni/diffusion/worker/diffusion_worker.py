@@ -695,6 +695,8 @@ class DiffusionWorker:
             req = new_req.req
             diffusion_kv_metadata = new_req.diffusion_kv_metadata
 
+        if od_config.cache_backend == "align_cache" and req.sampling_params.lora_request is not None:
+            raise ValueError("align_cache: request LoRA is unsupported; weights were not modified")
         if self.lora_manager is not None:
             try:
                 self.lora_manager.set_active_adapter(req.sampling_params.lora_request, req.sampling_params.lora_scale)

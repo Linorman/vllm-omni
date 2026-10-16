@@ -1,0 +1,154 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Installation ownership and request isolation for AlignCache."""
+
+from contextlib import contextmanager
+
+import torch
+
+from vllm_omni.diffusion.cache.base import CacheBackend
+
+from .adapters.wan21 import validate_pipeline
+from .config import AlignCacheConfig
+from .runtime import AlignCacheRuntime
+from .state import ModelBinding
+
+
+def validate_execution_config(config):
+    if getattr(config, "stage_role", None) not in (None, "full"):
+        raise ValueError("align_cache.stage_role: disaggregated stages are not supported")
+    if getattr(config, "diffusion_kv_mode", "dense_legacy") != "dense_legacy":
+        raise ValueError("align_cache.diffusion_kv_mode: requires dense_legacy")
+    if not config.enforce_eager:
+        raise ValueError("align_cache.enforce_eager: must be True")
+    for name in (
+        "enable_cpu_offload",
+        "enable_layerwise_offload",
+        "enable_distributed_layerwise_offload",
+        "diffusion_offload_config",
+        "streaming_output",
+        "step_execution",
+        "lora_path",
+        "quantization_config",
+        "enable_sleep_mode",
+    ):
+        if getattr(config, name, None):
+            raise ValueError(f"align_cache.{name}: unsupported in wan21_feedback_v1")
+    if config.dtype not in (torch.bfloat16, "bfloat16", "bf16"):
+        raise ValueError("align_cache.dtype: requires bfloat16")
+    if getattr(config, "num_gpus", 1) not in (None, 1):
+        raise ValueError("align_cache.num_gpus: requires 1")
+    parallel = config.parallel_config
+    if getattr(parallel, "enable_expert_parallel", False):
+        raise ValueError("align_cache.parallel_config.enable_expert_parallel: unsupported")
+    for name in (
+        "pipeline_parallel_size",
+        "data_parallel_size",
+        "tensor_parallel_size",
+        "sequence_parallel_size",
+        "ulysses_degree",
+        "ring_degree",
+        "allgather_degree",
+        "cfg_parallel_size",
+        "vae_patch_parallel_size",
+    ):
+        if getattr(parallel, name, 1) != 1:
+            raise ValueError(f"align_cache.parallel_config.{name}: requires 1")
+    if parallel.use_hsdp:
+        raise ValueError("align_cache.parallel_config.use_hsdp: unsupported")
+
+
+class AlignCacheBackend(CacheBackend):
+    def __init__(self, config=None):
+        super().__init__(config)
+        self.align_config = AlignCacheConfig.parse(config)
+        self.binding = None
+        self.runtime = None
+        self.component_binding = ()
+
+    def _components(self, pipeline):
+        if self.align_config.policy == "wan22_feedback_v1":
+            return (pipeline.transformer, pipeline.transformer_2)
+        return (pipeline.transformer,)
+
+    def _validate_pipeline(self, pipeline):
+        if self.align_config.policy == "wan22_feedback_v1":
+            from .adapters.wan22 import validate_pipeline as validate_wan22
+
+            validate_wan22(pipeline)
+        elif self.align_config.profile == "wan21_14b_reference_v1":
+            validate_pipeline(pipeline, large=True)
+        else:
+            validate_pipeline(pipeline)
+
+    def _check_binding(self, pipeline):
+        if (
+            self.binding is None
+            or pipeline is not self.binding.pipeline
+            or pipeline.transformer is not self.binding.transformer
+            or getattr(pipeline, "_aligncache_runtime", None) is not self.runtime
+            or getattr(self.runtime, "owner", None) is not self.binding.token
+            or any(a is not b for a, b in zip(self.component_binding, self._components(pipeline)))
+        ):
+            raise RuntimeError("align_cache: pipeline/transformer/runtime ownership conflict")
+
+    def enable(self, pipeline):
+        if self.enabled:
+            self._check_binding(pipeline)
+            return
+        if hasattr(pipeline, "_aligncache_runtime"):
+            raise RuntimeError("align_cache: foreign runtime already installed")
+        validate_execution_config(pipeline.od_config)
+        self._validate_pipeline(pipeline)
+        if self.align_config.policy == "wan22_feedback_v1":
+            from .multicomponent import Wan22Runtime
+
+            runtime = Wan22Runtime(self.align_config)
+        else:
+            runtime = AlignCacheRuntime(self.align_config)
+        token = object()
+        runtime.owner = token
+        binding = ModelBinding(pipeline, pipeline.transformer, token)
+        try:
+            pipeline._aligncache_runtime = runtime
+        except BaseException:
+            if getattr(pipeline, "_aligncache_runtime", None) is runtime:
+                del pipeline._aligncache_runtime
+            raise
+        self.component_binding = self._components(pipeline)
+        self.binding, self.runtime, self.enabled = binding, runtime, True
+
+    def disable(self, pipeline):
+        if not self.enabled:
+            return
+        if pipeline is not self.binding.pipeline:
+            raise RuntimeError("align_cache: disable called for different pipeline")
+        if self.runtime.active:
+            raise RuntimeError("align_cache: cannot disable an active request")
+        self.runtime.reset()
+        if getattr(pipeline, "_aligncache_runtime", None) is self.runtime and self.runtime.owner is self.binding.token:
+            del pipeline._aligncache_runtime
+        self.runtime = self.binding = None
+        self.component_binding = ()
+        self.enabled = False
+
+    def refresh(self, pipeline, num_inference_steps=0, verbose=True):
+        self._check_binding(pipeline)
+        self.runtime.reset()
+
+    @contextmanager
+    def request_context(self, pipeline, req):
+        self._check_binding(pipeline)
+        if self.runtime.active:
+            raise RuntimeError("align_cache: concurrent/reentrant request forbidden")
+        self.runtime.reset()
+        if getattr(req, "skip_cache_refresh", False):
+            raise ValueError("align_cache.skip_cache_refresh: unsupported")
+        if req.prompt is None or req.sampling_params.num_outputs_per_prompt != 1:
+            raise ValueError("align_cache: requires one prompt and one output")
+        if req.sampling_params.lora_request is not None:
+            raise ValueError("align_cache: request LoRA is unsupported")
+        # Re-check admission: settings or hooks may change between requests.
+        validate_execution_config(pipeline.od_config)
+        self._validate_pipeline(pipeline)
+        with self.runtime.request_context():
+            yield

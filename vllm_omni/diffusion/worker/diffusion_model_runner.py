@@ -13,7 +13,7 @@ from __future__ import annotations
 import copy
 import gc
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from typing import TYPE_CHECKING, Any, cast
 
@@ -310,6 +310,11 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
             custom_pipeline_name: Optional custom pipeline class name to use.
         """
 
+        if self.od_config.cache_backend == "align_cache":
+            from vllm_omni.diffusion.cache.aligncache.backend import validate_execution_config
+
+            validate_execution_config(self.od_config)
+
         if load_format == "dummy":
             return
 
@@ -421,6 +426,8 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
 
         if self.cache_backend is not None:
             if self.od_config.model_class_name in _NO_CACHE_ACCELERATION:
+                if self.od_config.cache_backend == "align_cache":
+                    raise ValueError("align_cache: this pipeline forbids cache acceleration")
                 logger.warning(
                     "Cache backend '%s' is not supported for %s; disabling cache acceleration.",
                     self.od_config.cache_backend,
@@ -459,6 +466,13 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
             self.pipeline._interaction_coordinator = self._interaction_coordinator
 
         logger.info("Model runner: Initialization complete.")
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        """Reject weight mutation while AlignCache owns an active generation."""
+        runtime = getattr(self.pipeline, "_aligncache_runtime", None)
+        if runtime is not None and runtime.active:
+            raise RuntimeError("align_cache: weight changes during an active request are unsupported")
+        return self.pipeline.load_weights(weights)
 
     def get_kv_cache_spec(self) -> dict[str, KVCacheSpec]:
         """Collect native specs from cache-enabled loaded attention modules."""
@@ -700,6 +714,9 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
         od_config: OmniDiffusionConfig,
     ) -> None:
         first_req = reqs[0]
+        if od_config.cache_backend == "align_cache":
+            if len(reqs) != 1 or getattr(first_req, "skip_cache_refresh", False):
+                raise ValueError("align_cache: one request required; skip_cache_refresh is unsupported")
         if self.cache_backend is None or not self.cache_backend.is_enabled():
             return
 
@@ -717,6 +734,7 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
             "tea_cache",
             "sea_cache",
             "step_cache",
+            "align_cache",
         ):
             # When num_inference_steps is None, some pipelines defer to their
             # own defaults. These backends use refresh to reset request state;
@@ -798,7 +816,13 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
         use_hsdp = od_config.parallel_config.use_hsdp
         use_distributed_offload = resolve_offload_strategy(self.od_config) is OffloadStrategy.DISTRIBUTED_LAYER_WISE
         grad_context = torch.no_grad() if (use_hsdp or use_distributed_offload) else torch.inference_mode()
-        with grad_context:
+        self._refresh_cache_for_requests(reqs, od_config=od_config)
+        cache_scope = (
+            self.cache_backend.request_context(self.pipeline, reqs[0])
+            if self.cache_backend is not None and self.cache_backend.is_enabled()
+            else nullcontext()
+        )
+        with grad_context, cache_scope:
             for req in reqs:
                 self._prepare_request_for_forward(
                     req,
@@ -806,8 +830,6 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
                     kv_prefetch_job=kv_prefetch_job,
                     use_prefetch=allow_single_output,
                 )
-
-            self._refresh_cache_for_requests(reqs, od_config=od_config)
 
             batch = DiffusionRequestBatch(requests=reqs)
             is_primary = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
@@ -918,9 +940,8 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
             ):
                 cache_summary(self.pipeline, details=True)
 
-        self._maybe_send_stage_payload(reqs, outputs)
-
-        return self._runner_output_from_outputs(reqs, outputs)
+            self._maybe_send_stage_payload(reqs, outputs)
+            return self._runner_output_from_outputs(reqs, outputs)
 
     def _attach_stepwise_metadata(
         self,

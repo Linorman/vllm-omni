@@ -604,6 +604,10 @@ class OmniEngineBase:
 
     @staticmethod
     def _normalize_cache_config(cache_backend: str | None, cache_config: Any | None) -> Any | None:
+        if cache_backend == "align_cache":
+            from vllm_omni.diffusion.cache.aligncache.config import normalize_cache_config
+
+            return normalize_cache_config(cache_config)
         if isinstance(cache_config, str):
             try:
                 cache_config = json.loads(cache_config)
