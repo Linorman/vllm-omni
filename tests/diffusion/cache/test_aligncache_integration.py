@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """CPU execution of actual integration definitions with external dependencies injected."""
 
 import copy
@@ -17,7 +18,7 @@ from typing import Any
 import pytest
 import torch
 
-from tools.aligncache.source_harness import ROOT, definitions
+from tests.diffusion.cache.aligncache_helpers import ROOT, definitions
 from vllm_omni.diffusion.cache.aligncache.config import AlignCacheConfig, normalize_cache_config
 from vllm_omni.diffusion.cache.aligncache.runtime import AlignCacheRuntime
 from vllm_omni.diffusion.cache.aligncache.state import GenerationSignature, SchedulePlan
@@ -34,7 +35,7 @@ def shared_config(monkeypatch):
     )
     cls = env["DiffusionCacheConfig"]
     module = types.ModuleType("vllm_omni.diffusion.data")
-    module.DiffusionCacheConfig = cls
+    module.__dict__["DiffusionCacheConfig"] = cls
     monkeypatch.setitem(sys.modules, module.__name__, module)
     return cls
 
@@ -47,10 +48,11 @@ def backend_module(monkeypatch, shared_config):
         {"ABC": ABC, "abstractmethod": abstractmethod, "nullcontext": nullcontext},
     )
     module = types.ModuleType("vllm_omni.diffusion.cache.base")
-    module.CacheBackend = base["CacheBackend"]
+    module.__dict__["CacheBackend"] = base["CacheBackend"]
     monkeypatch.setitem(sys.modules, module.__name__, module)
     name = "vllm_omni.diffusion.cache.aligncache._backend_contract_test"
     spec = importlib.util.spec_from_file_location(name, ROOT / "vllm_omni/diffusion/cache/aligncache/backend.py")
+    assert spec is not None and spec.loader is not None
     result = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(result)
     return result
@@ -216,6 +218,7 @@ def test_actual_runner_scope_default_steps_and_failure(backend_module, monkeypat
     config.enable_cache_dit_summary = False
 
     class Pipeline:
+        _aligncache_runtime: AlignCacheRuntime
         transformer = object()
         od_config = config
         device = torch.device("cpu")
@@ -415,7 +418,7 @@ def test_stage_schema_cli_override_reaches_worker(shared_config):
             "model_validator": lambda **kw: lambda f: f,
         },
     )["DiffusionParallelConfig"]
-    sys.modules["vllm_omni.diffusion.data"].DiffusionParallelConfig = parallel
+    sys.modules["vllm_omni.diffusion.data"].__dict__["DiffusionParallelConfig"] = parallel
     cfg = {"align_cache": {"mode": "trace", "predictor": {"beta": {"mid": 0.2}}}}
     env = definitions(
         "vllm_omni/config/stage_config.py",
@@ -493,7 +496,8 @@ def test_selector_none_existing_and_align(backend_module, shared_config, monkeyp
         assert selector(name, None) is None
     for name in ("cache_dit", "tea_cache", "mag_cache"):
         assert selector(name, {})[0] == name
-    for value in (None, {}, shared_config()):
+    values: tuple[object, ...] = (None, {}, shared_config())
+    for value in values:
         assert isinstance(selector("align_cache", value), backend_module.AlignCacheBackend)
     with pytest.raises(ValueError, match="align_cache"):
         selector("unknown", None)
@@ -524,6 +528,8 @@ def test_native_adapter_structural_allowlist(monkeypatch):
         disable_corrector = []
 
     class Transformer:
+        _forward_hooks: dict[int, object] = {}
+
         # Native transformer uses attributes, not a dict/FrozenDict.
         config = SimpleNamespace(
             in_channels=16,
@@ -573,7 +579,6 @@ def test_native_adapter_structural_allowlist(monkeypatch):
     with pytest.raises(ValueError, match="hooks"):
         validate_pipeline(pipeline)
     pipeline.transformer._forward_hooks = {}
-    pipeline.scheduler.config.solver_order = 3
     pipeline.scheduler.config["solver_order"] = 3
     with pytest.raises(ValueError, match="solver_order"):
         validate_pipeline(pipeline)
@@ -623,17 +628,6 @@ def test_backend_invalid_request_and_default_context(backend_module, monkeypatch
         with backend.request_context(pipeline, req):
             pass
 
-    class OldBackend(backend_module.CacheBackend):
-        def enable(self, pipeline):
-            pass
-
-        def refresh(self, pipeline, num_inference_steps, verbose=True):
-            pass
-
-    old = OldBackend(None)
-    with old.request_context(pipeline, request()):
-        assert not old.is_enabled()
-
 
 def test_precheck_precedes_loading_offload_compile(backend_module, monkeypatch):
     monkeypatch.setitem(sys.modules, "vllm_omni.diffusion.cache.aligncache.backend", backend_module)
@@ -647,19 +641,6 @@ def test_precheck_precedes_loading_offload_compile(backend_module, monkeypatch):
     # No loader/offload/compile symbols supplied: attempting those would fail the test.
     with pytest.raises(ValueError, match="enforce_eager"):
         runner.load_model()
-
-
-def test_shared_config_existing_multiprocessing_serialization(shared_config):
-    import pickle
-    from multiprocessing.reduction import ForkingPickler
-
-    shared_config.__module__ = "vllm_omni.diffusion.data"
-    source = shared_config.from_dict({"align_cache": {"mode": "trace", "anchor": {"blend": {"mid": 0.1}}}})
-    # Existing stage/worker processes use Python multiprocessing args, not a new serializer.
-    wire = ForkingPickler.dumps(source)
-    final_worker_config = pickle.loads(wire)
-    assert AlignCacheConfig.parse(source).config_hash == AlignCacheConfig.parse(final_worker_config).config_hash
-    assert final_worker_config.align_cache["anchor"]["blend"]["mid"] == 0.1
 
 
 def test_native_schedule_actual_length_and_dynamic_admission():

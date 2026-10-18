@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """CPU component routing contracts; these do not establish checkpoint/GPU compatibility."""
 
 from contextlib import contextmanager
@@ -131,7 +132,7 @@ def test_second_component_entry_failure_unwinds_first():
 def test_actual_wan22_loop_preserves_native_routing(mode):
     from types import MethodType
 
-    from tools.aligncache.source_harness import definitions
+    from tests.diffusion.cache.aligncache_helpers import definitions
 
     runtime = Wan22Runtime(
         AlignCacheConfig.parse({"align_cache": {"profile": "wan22_t2v_reference_v1", "mode": mode, "warmup_steps": 2}})

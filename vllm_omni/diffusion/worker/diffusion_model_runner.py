@@ -425,7 +425,12 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
         self.cache_backend = get_cache_backend(self.od_config.cache_backend, self.od_config.cache_config)
 
         if self.cache_backend is not None:
-            if self.od_config.model_class_name in _NO_CACHE_ACCELERATION:
+            # Other backends retain the existing exclusion.
+            native_qwen_aligncache = (
+                self.od_config.cache_backend == "align_cache"
+                and self.od_config.model_class_name == "QwenImage21Pipeline"
+            )
+            if self.od_config.model_class_name in _NO_CACHE_ACCELERATION and not native_qwen_aligncache:
                 if self.od_config.cache_backend == "align_cache":
                     raise ValueError("align_cache: this pipeline forbids cache acceleration")
                 logger.warning(
@@ -469,6 +474,7 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         """Reject weight mutation while AlignCache owns an active generation."""
+        assert self.pipeline is not None, "Model not loaded. Call load_model() first."
         runtime = getattr(self.pipeline, "_aligncache_runtime", None)
         if runtime is not None and runtime.active:
             raise RuntimeError("align_cache: weight changes during an active request are unsupported")

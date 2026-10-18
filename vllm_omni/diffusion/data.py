@@ -145,8 +145,10 @@ def normalize_omni_diffusion_kwargs(
         try:
             config_kwargs["cache_config"] = json.loads(cache_config)
         except json.JSONDecodeError:
-            logger.warning("Invalid cache_config JSON, using backend defaults.")
-            config_kwargs.pop("cache_config", None)
+            # Defer to the resolved backend so strict backends report the original error.
+            if apply_defaults or "cache_backend" in config_kwargs:
+                logger.warning("Invalid cache_config JSON, using backend defaults.")
+                config_kwargs.pop("cache_config", None)
 
     if config_kwargs.get("streaming_output") is None and config_kwargs.get("diffusion_streaming_output") is not None:
         config_kwargs["streaming_output"] = config_kwargs["diffusion_streaming_output"]

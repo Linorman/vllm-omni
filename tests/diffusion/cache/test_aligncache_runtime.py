@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 import gc
 import weakref
 
@@ -96,6 +97,7 @@ def test_uncond_error_atomic_no_retry_and_recovery():
     assert runtime.state is None
     with runtime.request_context():
         x = bind(runtime)
+        assert runtime.state is not None
         assert runtime.state.completed_pairs == 0
         step(runtime, 0, x)
 
@@ -315,6 +317,10 @@ def test_identity_mutations_fail(mutation):
                 context = replace(context, timestep=19)
             runtime.predict_pair(context, x, conditions, lambda branch: pytest.fail("must fail before forward"))
     assert runtime.state is None
+    with runtime.request_context():
+        step(runtime, 0, bind(runtime))
+        assert runtime.state is not None
+        assert runtime.state.completed_pairs == 1
 
 
 @pytest.mark.parametrize("where", ["cond", "scheduler", "decode", "cancel"])
@@ -364,6 +370,10 @@ def test_missing_schedule_fails_before_forward():
                 StepContext(0, 20, 1, 5), torch.ones(128), (2, 3), lambda branch: pytest.fail("unexpected forward")
             )
     assert runtime.state is None
+    with runtime.request_context():
+        step(runtime, 0, bind(runtime))
+        assert runtime.state is not None
+        assert runtime.state.completed_pairs == 1
 
 
 @pytest.mark.parametrize("mode", ["accelerate", "trace", "force_exact"])
@@ -385,3 +395,56 @@ def test_capacity_fallback_preserves_native_dtype_identity():
             step(runtime, 0, x)
             step(runtime, 1, x, lambda branch: x.to(torch.bfloat16))
     assert runtime.last_summary["completed_pairs"] == 1
+
+
+def test_request_a_b_a_matches_fresh_a_across_prompt_seed_shape_and_cfg():
+    runtime = setup_runtime(base_threshold=0.003)
+
+    def generate(runtime, prompt, seed, width, guidance):
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+        initial = torch.rand((1, 1, 1, 1, width), generator=generator) + 1
+        values = []
+        with runtime.request_context():
+            runtime.bind_schedule(
+                SchedulePlan(tuple(float(20 - i) for i in range(20)), "fake", "{}"),
+                GenerationSignature(
+                    runtime.epoch, 1, (id(prompt), seed), guidance, tuple(initial.shape), initial.dtype, initial.device
+                ),
+            )
+            for index in range(20):
+                x = initial + index * 0.01
+
+                def exact(branch):
+                    return x * (0.2 if branch == "cond" else 0.15) + len(prompt) * 0.1
+
+                output = runtime.predict_pair(
+                    StepContext(index, float(20 - index), 1, guidance), x, (id(prompt), seed), exact
+                )
+                values.append(tuple(value.clone() for value in output))
+            feedback = dict(runtime.state.feedback_scale)
+        return values, feedback, dict(runtime.last_summary["fallback_counts"])
+
+    independent = generate(setup_runtime(base_threshold=0.003), "request A", 11, 128, 5.0)
+    first = generate(runtime, "request A", 11, 128, 5.0)
+    generate(runtime, "different request B", 29, 65, 7.5)
+    second = generate(runtime, "request A", 11, 128, 5.0)
+    for candidate in (first, second):
+        for actual_pair, expected_pair in zip(candidate[0], independent[0]):
+            for actual, expected in zip(actual_pair, expected_pair):
+                torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        assert candidate[1:] == independent[1:]
+
+
+def test_repeated_step_releases_state_and_allows_new_request():
+    runtime = setup_runtime()
+    with pytest.raises(ValueError, match="out-of-order"):
+        with runtime.request_context():
+            x = bind(runtime)
+            step(runtime, 0, x)
+            step(runtime, 0, x, lambda branch: pytest.fail("duplicate step must not run the model"))
+    assert runtime.state is None and runtime.plan is None
+    assert runtime.last_summary["model_forward_calls"] == 2
+    with runtime.request_context():
+        step(runtime, 0, bind(runtime))
+        assert runtime.state is not None
+        assert runtime.state.completed_pairs == 1

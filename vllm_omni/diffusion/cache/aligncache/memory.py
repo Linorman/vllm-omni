@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Weak, unique-storage liveness accounting for controller tensor operations."""
 
 import weakref
@@ -29,6 +30,9 @@ class TensorLedger(TorchDispatchMode):
         elif hasattr(obj, "__dataclass_fields__"):
             for name in obj.__dataclass_fields__:
                 self.seed(getattr(obj, name))
+        elif isinstance(obj, (tuple, list)):
+            for value in obj:
+                self.seed(value)
         elif isinstance(obj, dict):
             for value in obj.values():
                 self.seed(value)

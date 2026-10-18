@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Strict, immutable schema for the uncalibrated wan21_reference_v1 profile."""
 
 from __future__ import annotations
@@ -68,6 +69,13 @@ class AnchorConfig:
 
 
 @dataclass(frozen=True)
+class FlowConfig:
+    audio_threshold: float = 0.165
+    max_time_gap: float = 0.2
+    max_consecutive_skips: int = 4
+
+
+@dataclass(frozen=True)
 class AlignCacheConfig:
     schema_version: int = 1
     policy: str = "wan21_feedback_v1"
@@ -78,6 +86,7 @@ class AlignCacheConfig:
     tail_steps: int = 1
     max_cache_bytes: int = 1073741824
     diagnostics: str = "summary"
+    flow: FlowConfig = field(default_factory=FlowConfig)
     phase: PhaseConfig = field(default_factory=PhaseConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
     predictor: PredictorConfig = field(default_factory=PredictorConfig)
@@ -98,6 +107,55 @@ class AlignCacheConfig:
             )
         elif profile == "wan21_14b_reference_v1":
             defaults = replace(defaults, profile=profile)
+        if profile == "qwen21_reference_v1":
+            defaults = replace(
+                defaults,
+                profile=profile,
+                policy="qwen_flow_v1",
+                base_threshold=0.12,
+                warmup_steps=5,
+                tail_steps=2,
+                phase=PhaseConfig(0.2, 0.8, Phases(0.85, 1.0, 0.85)),
+                feedback=FeedbackConfig(
+                    age_caps=Phases(2, 4, 2),
+                    scale_low=Phases(0.8, 0.8, 0.8),
+                    scale_high=Phases(1.0, 1.15, 1.0),
+                    ratio_low=0.01,
+                    ratio_high=100.0,
+                    eps=1e-12,
+                ),
+                predictor=replace(defaults.predictor, beta=Phases(0.2, 0.4, 0.2)),
+                anchor=replace(
+                    defaults.anchor,
+                    blend=Phases(0.0, 0.25, 0.0),
+                    cond_cap=Phases(0.02, 0.04, 0.02),
+                    disagreement_cap=Phases(0.01, 0.02, 0.01),
+                ),
+            )
+        elif profile == "minimax_h3_reference_v1":
+            defaults = replace(
+                defaults,
+                profile=profile,
+                policy="minimax_h3_flow_v1",
+                base_threshold=0.33,
+                warmup_steps=5,
+                feedback=replace(defaults.feedback, age_caps=Phases(4, 4, 4)),
+            )
+        if "flow" in namespace and defaults.policy not in ("qwen_flow_v1", "minimax_h3_flow_v1"):
+            raise ValueError("align_cache.flow: only supported by flow profiles")
+        if defaults.policy in ("qwen_flow_v1", "minimax_h3_flow_v1"):
+            allowed = {
+                "flow": {"max_time_gap", "max_consecutive_skips"}
+                if defaults.policy == "qwen_flow_v1"
+                else {"audio_threshold"},
+                "predictor": {"beta"},
+                "anchor": {"blend", "cond_cap", "disagreement_cap"} if defaults.policy == "qwen_flow_v1" else set(),
+            }
+            for group, names in allowed.items():
+                if group in namespace and isinstance(namespace[group], dict) and set(namespace[group]) - names:
+                    raise ValueError(f"align_cache.{group}: flow policy only accepts {sorted(names)}")
+            if isinstance(namespace.get("feedback"), dict) and "scale_init" in namespace["feedback"]:
+                raise ValueError("align_cache.feedback.scale_init: flow profiles require unity initialization")
         config = _merge(defaults, namespace, "align_cache")
         _validate(config)
         return config
@@ -188,8 +246,14 @@ def _merge(default, overrides, path):
 def _validate(c):
     for key, legal in {
         "schema_version": (1,),
-        "policy": ("wan21_feedback_v1", "wan22_feedback_v1"),
-        "profile": ("wan21_reference_v1", "wan21_14b_reference_v1", "wan22_t2v_reference_v1"),
+        "policy": ("wan21_feedback_v1", "wan22_feedback_v1", "qwen_flow_v1", "minimax_h3_flow_v1"),
+        "profile": (
+            "wan21_reference_v1",
+            "wan21_14b_reference_v1",
+            "wan22_t2v_reference_v1",
+            "qwen21_reference_v1",
+            "minimax_h3_reference_v1",
+        ),
         "mode": ("passthrough", "force_exact", "trace", "accelerate"),
         "diagnostics": ("off", "summary", "trace"),
     }.items():
@@ -205,6 +269,12 @@ def _validate(c):
         "profile",
         "Wan2.2 policy requires wan22_t2v_reference_v1; Wan2.1 requires a Wan2.1 profile",
     )
+    expected_policy = {"qwen21_reference_v1": "qwen_flow_v1", "minimax_h3_reference_v1": "minimax_h3_flow_v1"}
+    if c.profile in expected_policy or c.policy in expected_policy.values():
+        check(expected_policy.get(c.profile) == c.policy, "profile", "flow policy/profile mismatch")
+    check(c.flow.audio_threshold >= 0, "flow.audio_threshold", "must be >= 0")
+    check(c.flow.max_consecutive_skips >= 0, "flow.max_consecutive_skips", "must be >= 0")
+    check(c.flow.max_time_gap > 0, "flow.max_time_gap", "must be > 0")
     check(c.base_threshold >= 0, "base_threshold", "must be >= 0")
     for name in ("warmup_steps", "tail_steps"):
         check(getattr(c, name) >= 0, name, "must be >= 0")

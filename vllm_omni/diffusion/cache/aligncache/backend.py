@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Installation ownership and request isolation for AlignCache."""
 
+from __future__ import annotations
+
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -11,6 +15,10 @@ from .adapters.wan21 import validate_pipeline
 from .config import AlignCacheConfig
 from .runtime import AlignCacheRuntime
 from .state import ModelBinding
+
+if TYPE_CHECKING:
+    from .flow import FlowRuntime
+    from .multicomponent import Wan22Runtime
 
 
 def validate_execution_config(config):
@@ -61,9 +69,9 @@ class AlignCacheBackend(CacheBackend):
     def __init__(self, config=None):
         super().__init__(config)
         self.align_config = AlignCacheConfig.parse(config)
-        self.binding = None
-        self.runtime = None
-        self.component_binding = ()
+        self.binding: ModelBinding | None = None
+        self.runtime: AlignCacheRuntime | FlowRuntime | Wan22Runtime | None = None
+        self.component_binding: tuple[object, ...] = ()
 
     def _components(self, pipeline):
         if self.align_config.policy == "wan22_feedback_v1":
@@ -71,7 +79,11 @@ class AlignCacheBackend(CacheBackend):
         return (pipeline.transformer,)
 
     def _validate_pipeline(self, pipeline):
-        if self.align_config.policy == "wan22_feedback_v1":
+        if self.align_config.policy in ("qwen_flow_v1", "minimax_h3_flow_v1"):
+            from .adapters.flow import validate_pipeline as validate_flow
+
+            validate_flow(pipeline, self.align_config.policy)
+        elif self.align_config.policy == "wan22_feedback_v1":
             from .adapters.wan22 import validate_pipeline as validate_wan22
 
             validate_wan22(pipeline)
@@ -80,9 +92,10 @@ class AlignCacheBackend(CacheBackend):
         else:
             validate_pipeline(pipeline)
 
-    def _check_binding(self, pipeline):
+    def _check_binding(self, pipeline) -> AlignCacheRuntime | FlowRuntime | Wan22Runtime:
         if (
-            self.binding is None
+            self.runtime is None
+            or self.binding is None
             or pipeline is not self.binding.pipeline
             or pipeline.transformer is not self.binding.transformer
             or getattr(pipeline, "_aligncache_runtime", None) is not self.runtime
@@ -90,6 +103,7 @@ class AlignCacheBackend(CacheBackend):
             or any(a is not b for a, b in zip(self.component_binding, self._components(pipeline)))
         ):
             raise RuntimeError("align_cache: pipeline/transformer/runtime ownership conflict")
+        return self.runtime
 
     def enable(self, pipeline):
         if self.enabled:
@@ -99,14 +113,23 @@ class AlignCacheBackend(CacheBackend):
             raise RuntimeError("align_cache: foreign runtime already installed")
         validate_execution_config(pipeline.od_config)
         self._validate_pipeline(pipeline)
-        if self.align_config.policy == "wan22_feedback_v1":
+        runtime: AlignCacheRuntime | FlowRuntime | Wan22Runtime
+        if self.align_config.policy == "qwen_flow_v1":
+            from .adapters.flow import QwenFlowRuntime
+
+            runtime = QwenFlowRuntime(self.align_config)
+        elif self.align_config.policy == "minimax_h3_flow_v1":
+            from .flow import FlowRuntime
+
+            runtime = FlowRuntime(self.align_config)
+        elif self.align_config.policy == "wan22_feedback_v1":
             from .multicomponent import Wan22Runtime
 
             runtime = Wan22Runtime(self.align_config)
         else:
             runtime = AlignCacheRuntime(self.align_config)
         token = object()
-        runtime.owner = token
+        setattr(runtime, "owner", token)
         binding = ModelBinding(pipeline, pipeline.transformer, token)
         try:
             pipeline._aligncache_runtime = runtime
@@ -120,27 +143,30 @@ class AlignCacheBackend(CacheBackend):
     def disable(self, pipeline):
         if not self.enabled:
             return
+        assert self.binding is not None and self.runtime is not None
         if pipeline is not self.binding.pipeline:
             raise RuntimeError("align_cache: disable called for different pipeline")
         if self.runtime.active:
             raise RuntimeError("align_cache: cannot disable an active request")
         self.runtime.reset()
-        if getattr(pipeline, "_aligncache_runtime", None) is self.runtime and self.runtime.owner is self.binding.token:
+        if (
+            getattr(pipeline, "_aligncache_runtime", None) is self.runtime
+            and getattr(self.runtime, "owner", None) is self.binding.token
+        ):
             del pipeline._aligncache_runtime
         self.runtime = self.binding = None
         self.component_binding = ()
         self.enabled = False
 
     def refresh(self, pipeline, num_inference_steps=0, verbose=True):
-        self._check_binding(pipeline)
-        self.runtime.reset()
+        self._check_binding(pipeline).reset()
 
     @contextmanager
     def request_context(self, pipeline, req):
-        self._check_binding(pipeline)
-        if self.runtime.active:
+        runtime = self._check_binding(pipeline)
+        if runtime.active:
             raise RuntimeError("align_cache: concurrent/reentrant request forbidden")
-        self.runtime.reset()
+        runtime.reset()
         if getattr(req, "skip_cache_refresh", False):
             raise ValueError("align_cache.skip_cache_refresh: unsupported")
         if req.prompt is None or req.sampling_params.num_outputs_per_prompt != 1:
@@ -150,5 +176,5 @@ class AlignCacheBackend(CacheBackend):
         # Re-check admission: settings or hooks may change between requests.
         validate_execution_config(pipeline.od_config)
         self._validate_pipeline(pipeline)
-        with self.runtime.request_context():
+        with runtime.request_context():
             yield
