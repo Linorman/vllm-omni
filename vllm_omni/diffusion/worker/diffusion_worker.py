@@ -86,6 +86,7 @@ from vllm_omni.diffusion.vllm_config import create_diffusion_vllm_config
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.diffusion.worker.utils import BaseRunnerOutput, BatchRunnerOutput
 from vllm_omni.engine.stage_init_utils import set_death_signal
+from vllm_omni.errors import OmniClientError
 from vllm_omni.inputs.data import OmniInteractionPrompt
 from vllm_omni.lora.request import LoRARequest
 from vllm_omni.platforms import current_omni_platform
@@ -726,7 +727,7 @@ class DiffusionWorker:
             request = req
 
         if od_config.cache_backend == "align_cache" and request.sampling_params.lora_request is not None:
-            raise ValueError("align_cache: request LoRA is unsupported; weights were not modified")
+            raise OmniClientError("align_cache: request LoRA is unsupported; weights were not modified")
         if self.lora_manager is not None:
             try:
                 self.lora_manager.set_active_adapter(
@@ -762,9 +763,9 @@ class DiffusionWorker:
         assert self.model_runner is not None, "Model runner not initialized"
         if od_config.cache_backend == "align_cache":
             if len(scheduler_output.scheduled_new_reqs) > 1 or scheduler_output.scheduled_cached_reqs.request_ids:
-                raise ValueError("align_cache: one new request required; cached/stepwise requests are unsupported")
+                raise OmniClientError("align_cache: one new request required; cached/stepwise requests are unsupported")
             if any(item.req.sampling_params.lora_request is not None for item in scheduler_output.scheduled_new_reqs):
-                raise ValueError("align_cache: request LoRA is unsupported; weights were not modified")
+                raise OmniClientError("align_cache: request LoRA is unsupported; weights were not modified")
         # LoRA: same adapter/scale within batch guaranteed by RequestBatchSamplingParamsKey.
         if self.lora_manager is not None and scheduler_output.scheduled_new_reqs:
             sp = scheduler_output.scheduled_new_reqs[0].req.sampling_params

@@ -12,6 +12,7 @@ from vllm_omni.diffusion.sched.interface import CachedRequestData, DiffusionSche
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.diffusion.worker.diffusion_worker import DiffusionWorker
 from vllm_omni.diffusion.worker.utils import BatchRunnerOutput
+from vllm_omni.errors import OmniClientError
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.lora.request import LoRARequest
 
@@ -44,8 +45,9 @@ def test_aligncache_batch_admission_precedes_lora_activation(
     if cached:
         scheduled.scheduled_cached_reqs.request_ids.append("cached-request")
     config = OmniDiffusionConfig(cache_backend="align_cache", enforce_eager=True)
-    with pytest.raises(ValueError, match="align_cache"):
+    with pytest.raises(OmniClientError, match="align_cache") as caught:
         worker.execute_model_batch(scheduled, config)
+    assert caught.value.status_code == 400
     worker.lora_manager.set_active_adapter.assert_not_called()
     worker.model_runner.execute_model_batch.assert_not_called()
 

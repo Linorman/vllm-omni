@@ -22,6 +22,7 @@ from tests.diffusion.cache.aligncache_helpers import ROOT, definitions
 from vllm_omni.diffusion.cache.aligncache.config import AlignCacheConfig, normalize_cache_config
 from vllm_omni.diffusion.cache.aligncache.runtime import AlignCacheRuntime
 from vllm_omni.diffusion.cache.aligncache.state import GenerationSignature, SchedulePlan
+from vllm_omni.errors import OmniClientError
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -308,7 +309,7 @@ def test_native_loop_counts_kwargs_and_equivalence(monkeypatch, failure):
     cls = definitions(
         "vllm_omni/diffusion/models/wan2_1/pipeline_wan2_1_common.py",
         {"Wan21PipelineBase"},
-        {"set_forward_context_denoise_step_idx": lambda i: None},
+        {"set_forward_context_denoise_step_idx": lambda i: None, "check_request_cancellation": lambda: None},
         {"diffuse"},
     )["Wan21PipelineBase"]
 
@@ -585,9 +586,12 @@ def test_native_adapter_structural_allowlist(monkeypatch):
 
 
 def test_worker_rejects_lora_before_activation():
-    cls = definitions("vllm_omni/diffusion/worker/diffusion_worker.py", {"DiffusionWorker"}, {}, {"execute_model"})[
-        "DiffusionWorker"
-    ]
+    cls = definitions(
+        "vllm_omni/diffusion/worker/diffusion_worker.py",
+        {"DiffusionWorker"},
+        {"OmniClientError": OmniClientError},
+        {"execute_model"},
+    )["DiffusionWorker"]
     worker = cls()
     worker.model_runner = object()
     worker.lora_manager = SimpleNamespace(set_active_adapter=lambda *args: pytest.fail("weights must not change"))
