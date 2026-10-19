@@ -13,12 +13,11 @@ from vllm_omni.diffusion.cache.base import CacheBackend
 
 from .adapters.wan21 import validate_pipeline
 from .config import AlignCacheConfig
-from .runtime import AlignCacheRuntime
+from .multicomponent import WanRuntime
 from .state import ModelBinding
 
 if TYPE_CHECKING:
     from .flow import FlowRuntime
-    from .multicomponent import Wan22Runtime
 
 
 def validate_execution_config(config):
@@ -70,7 +69,7 @@ class AlignCacheBackend(CacheBackend):
         super().__init__(config)
         self.align_config = AlignCacheConfig.parse(config)
         self.binding: ModelBinding | None = None
-        self.runtime: AlignCacheRuntime | FlowRuntime | Wan22Runtime | None = None
+        self.runtime: FlowRuntime | WanRuntime | None = None
         self.component_binding: tuple[object, ...] = ()
 
     def _components(self, pipeline):
@@ -92,7 +91,7 @@ class AlignCacheBackend(CacheBackend):
         else:
             validate_pipeline(pipeline)
 
-    def _check_binding(self, pipeline) -> AlignCacheRuntime | FlowRuntime | Wan22Runtime:
+    def _check_binding(self, pipeline) -> FlowRuntime | WanRuntime:
         if (
             self.runtime is None
             or self.binding is None
@@ -113,7 +112,7 @@ class AlignCacheBackend(CacheBackend):
             raise RuntimeError("align_cache: foreign runtime already installed")
         validate_execution_config(pipeline.od_config)
         self._validate_pipeline(pipeline)
-        runtime: AlignCacheRuntime | FlowRuntime | Wan22Runtime
+        runtime: FlowRuntime | WanRuntime
         if self.align_config.policy == "qwen_flow_v1":
             from .adapters.flow import QwenFlowRuntime
 
@@ -122,12 +121,8 @@ class AlignCacheBackend(CacheBackend):
             from .flow import FlowRuntime
 
             runtime = FlowRuntime(self.align_config)
-        elif self.align_config.policy == "wan22_feedback_v1":
-            from .multicomponent import Wan22Runtime
-
-            runtime = Wan22Runtime(self.align_config)
         else:
-            runtime = AlignCacheRuntime(self.align_config)
+            runtime = WanRuntime(self.align_config)
         token = object()
         setattr(runtime, "owner", token)
         binding = ModelBinding(pipeline, pipeline.transformer, token)

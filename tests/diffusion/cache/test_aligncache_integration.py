@@ -10,7 +10,7 @@ import logging
 import os
 import sys
 import types
-from abc import ABC, ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any
@@ -20,8 +20,7 @@ import torch
 
 from tests.diffusion.cache.aligncache_helpers import ROOT, definitions
 from vllm_omni.diffusion.cache.aligncache.config import AlignCacheConfig, normalize_cache_config
-from vllm_omni.diffusion.cache.aligncache.runtime import AlignCacheRuntime
-from vllm_omni.diffusion.cache.aligncache.state import GenerationSignature, SchedulePlan
+from vllm_omni.diffusion.cache.aligncache.multicomponent import WanRuntime
 from vllm_omni.errors import OmniClientError
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -123,14 +122,14 @@ def test_install_refresh_disable_ownership(backend_module, monkeypatch):
     backend.enable(pipeline)
     assert installed is pipeline._aligncache_runtime
     with backend.request_context(pipeline, request()):
-        before = installed.state
+        before = installed.components["transformer"].state
         with pytest.raises(RuntimeError, match="active"):
             backend.refresh(pipeline, 0)
-        assert installed.state is before
+        assert installed.components["transformer"].state is before
     for _ in range(2):
         backend.refresh(pipeline, 40)
         with backend.request_context(pipeline, request()):
-            assert installed.state.completed_pairs == 0
+            assert installed.components["transformer"].state.completed_pairs == 0
     backend.disable(pipeline)
     backend.disable(pipeline)
     assert not hasattr(pipeline, "_aligncache_runtime")
@@ -219,7 +218,7 @@ def test_actual_runner_scope_default_steps_and_failure(backend_module, monkeypat
     config.enable_cache_dit_summary = False
 
     class Pipeline:
-        _aligncache_runtime: AlignCacheRuntime
+        _aligncache_runtime: WanRuntime
         transformer = object()
         od_config = config
         device = torch.device("cpu")
@@ -268,7 +267,7 @@ def test_actual_runner_scope_default_steps_and_failure(backend_module, monkeypat
 
     for _ in range(2):
         execute(request())
-        assert backend.runtime.state is None
+        assert backend.runtime.components["transformer"].state is None
     error = RuntimeError("postprocessing error")
 
     def fail(*args):
@@ -277,130 +276,13 @@ def test_actual_runner_scope_default_steps_and_failure(backend_module, monkeypat
     runner._prepare_output_for_transport = fail
     with pytest.raises(RuntimeError) as caught:
         execute(request())
-    assert caught.value is error and backend.runtime.state is None
+    assert caught.value is error and backend.runtime.components["transformer"].state is None
     with pytest.raises(ValueError, match="one request"):
         runner._refresh_cache_for_requests([request(), request()], od_config=config)
     req = request()
     req.skip_cache_refresh = True
     with pytest.raises(ValueError, match="skip_cache_refresh"):
         execute(req)
-
-
-@pytest.mark.parametrize("failure", [None, "scheduler", "binding"])
-def test_native_loop_counts_kwargs_and_equivalence(monkeypatch, failure):
-    from vllm_omni.diffusion.cache.aligncache.adapters import wan21
-
-    # CPU model fixture replaces only the device/model admission check, not pair or CFG logic.
-    def cpu_bind(runtime, pipeline, timesteps, latents, cond, uncond, guidance, dtype, extra):
-        runtime.bind_schedule(
-            SchedulePlan(tuple(float(t) for t in timesteps), "fake", "{}"),
-            GenerationSignature(
-                runtime.epoch,
-                id(pipeline.transformer),
-                (id(cond), id(uncond)),
-                guidance,
-                tuple(latents.shape),
-                dtype,
-                latents.device,
-            ),
-        )
-
-    monkeypatch.setattr(wan21, "bind_native_schedule", cpu_bind)
-    cls = definitions(
-        "vllm_omni/diffusion/models/wan2_1/pipeline_wan2_1_common.py",
-        {"Wan21PipelineBase"},
-        {"set_forward_context_denoise_step_idx": lambda i: None, "check_request_cancellation": lambda: None},
-        {"diffuse"},
-    )["Wan21PipelineBase"]
-
-    cfg_env = definitions(
-        "vllm_omni/diffusion/distributed/cfg_parallel.py",
-        {"_wrap", "_unwrap", "_slice_pred", "CFGParallelMixin"},
-        {
-            "torch": torch,
-            "ABCMeta": ABCMeta,
-            "get_classifier_free_guidance_world_size": lambda: 1,
-            "_get_cfg_world_size_or_one": lambda: 1,
-        },
-        {"predict_noise_maybe_with_cfg", "combine_cfg_noise"},
-    )
-    cfg_mixin = cfg_env["CFGParallelMixin"]
-
-    class Progress:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            pass
-
-        def update(self):
-            pass
-
-    results = {}
-    modes = ("passthrough", "accelerate") if failure else (None, "passthrough", "force_exact", "trace", "accelerate")
-    for mode in modes:
-        pipeline = cls()
-        pipeline.transformer = object()
-        pipeline.progress_bar = lambda **kw: Progress()
-        calls, combines, schedules = [], [], []
-
-        def exact(**kw):
-            calls.append(kw["cache_name"])
-            assert kw["return_dict"] is False and kw["attention_kwargs"] == {"test": True}
-            assert kw["current_model"] is pipeline.transformer
-            return kw["hidden_states"] * 0.2 + (1 if kw["cache_name"] == "cond" else 0.9)
-
-        def combine(c, u, g, normalize):
-            assert normalize is False
-            combines.append(g)
-            return cfg_mixin.combine_cfg_noise(pipeline, c, u, g, normalize)
-
-        scheduler_error = RuntimeError("injected scheduler failure")
-
-        def scheduler(noise, t, latents, cfg):
-            schedules.append(float(t))
-            if failure == "scheduler":
-                raise scheduler_error
-            if failure == "binding":
-                pipeline.transformer = object()
-            return latents - noise * 0.001
-
-        pipeline.predict_noise = exact
-        pipeline.combine_cfg_noise = combine
-        pipeline.predict_noise_maybe_with_cfg = types.MethodType(cfg_mixin.predict_noise_maybe_with_cfg, pipeline)
-        pipeline.scheduler_step_maybe_with_cfg = scheduler
-        context = nullcontext()
-        if mode:
-            runtime = AlignCacheRuntime(AlignCacheConfig.parse({"align_cache": {"mode": mode, "warmup_steps": 2}}))
-            pipeline._aligncache_runtime = runtime
-            context = runtime.request_context()
-        expected_error = (
-            pytest.raises(RuntimeError if failure == "scheduler" else ValueError) if failure else nullcontext()
-        )
-        with expected_error as caught, context:
-            results[mode] = pipeline.diffuse(
-                torch.ones(1, 1, 1, 1, 128),
-                torch.arange(20, 0, -1),
-                torch.ones(1, 2),
-                torch.zeros(1, 2),
-                5.0,
-                torch.float32,
-                {"test": True},
-            )
-        if failure:
-            assert len(calls) == 2
-            assert runtime.state is None and runtime.plan is None
-            assert runtime.last_summary["completed_pairs"] == 1
-            assert runtime.last_summary["status"] == "failed"
-            if failure == "scheduler":
-                assert caught.value is scheduler_error
-            continue
-        assert len(combines) == len(schedules) == 20
-        assert len(calls) == 40 if mode != "accelerate" else len(calls) < 40
-    if failure:
-        return
-    for mode in ("passthrough", "force_exact", "trace"):
-        torch.testing.assert_close(results[mode], results[None], rtol=0, atol=0)
 
 
 def test_stage_schema_cli_override_reaches_worker(shared_config):
@@ -504,7 +386,7 @@ def test_selector_none_existing_and_align(backend_module, shared_config, monkeyp
         selector("unknown", None)
 
 
-def test_native_adapter_structural_allowlist(monkeypatch):
+def test_wan21_adapter_structural_allowlist(monkeypatch):
     from vllm_omni.diffusion.cache.aligncache.adapters.wan21 import validate_pipeline
 
     class Config(dict):
@@ -554,12 +436,16 @@ def test_native_adapter_structural_allowlist(monkeypatch):
 
     class Pipeline:
         transformer = Transformer()
+        transformer_2 = None
+        has_transformer_2 = False
+        expand_timesteps = False
+        is_dmd = False
         scheduler = Scheduler()
 
     for name, attr, value in (
         ("vllm_omni.diffusion.models.schedulers", "FlowUniPCMultistepScheduler", Scheduler),
-        ("vllm_omni.diffusion.models.wan2_1.pipeline_wan2_1", "Wan21Pipeline", Pipeline),
-        ("vllm_omni.diffusion.models.wan2_1.wan2_1_transformer", "Wan21Transformer3DModel", Transformer),
+        ("vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2", "Wan22Pipeline", Pipeline),
+        ("vllm_omni.diffusion.models.wan2_2.wan2_2_transformer", "WanTransformer3DModel", Transformer),
     ):
         module = types.ModuleType(name)
         setattr(module, attr, value)
@@ -570,8 +456,16 @@ def test_native_adapter_structural_allowlist(monkeypatch):
     class I2V(Pipeline):
         pass
 
-    with pytest.raises(ValueError, match="native Wan21Pipeline"):
+    with pytest.raises(ValueError, match="native WanPipeline"):
         validate_pipeline(I2V())
+    pipeline.expand_timesteps = True
+    with pytest.raises(ValueError, match="native WanPipeline"):
+        validate_pipeline(pipeline)
+    pipeline.expand_timesteps = False
+    pipeline.transformer_2 = Transformer()
+    with pytest.raises(ValueError, match="one native WanTransformer3DModel"):
+        validate_pipeline(pipeline)
+    pipeline.transformer_2 = None
     pipeline.transformer.config.in_channels = 36
     with pytest.raises(ValueError, match="in_channels"):
         validate_pipeline(pipeline)
@@ -625,7 +519,7 @@ def test_backend_invalid_request_and_default_context(backend_module, monkeypatch
         with pytest.raises(ValueError):
             with backend.request_context(pipeline, req):
                 pytest.fail("invalid scope entered")
-        assert backend.runtime.state is None
+        assert backend.runtime.components["transformer"].state is None
     req = request()
     req.prompt = None
     with pytest.raises(ValueError):
@@ -647,13 +541,15 @@ def test_precheck_precedes_loading_offload_compile(backend_module, monkeypatch):
         runner.load_model()
 
 
-def test_native_schedule_actual_length_and_dynamic_admission():
-    from vllm_omni.diffusion.cache.aligncache.adapters.wan21 import bind_native_schedule
+def test_wan21_schedule_actual_length_and_dynamic_admission():
+    from vllm_omni.diffusion.cache.aligncache.multicomponent import WanRuntime
 
-    runtime = AlignCacheRuntime(AlignCacheConfig())
+    runtime = WanRuntime(AlignCacheConfig())
     timesteps = torch.tensor([999.0, 600.0, 300.0])
     pipeline = SimpleNamespace(
         transformer=object(),
+        transformer_2=None,
+        expand_timesteps=False,
         scheduler=SimpleNamespace(
             timesteps=timesteps,
             sigmas=torch.ones(4),
@@ -663,17 +559,28 @@ def test_native_schedule_actual_length_and_dynamic_admission():
     )
     latent = SimpleNamespace(ndim=5, shape=(1, 16, 1, 2, 2), device=torch.device("cuda:0"))
     cond, uncond = torch.ones(1, 2), torch.zeros(1, 2)
+
+    def bind(timesteps=timesteps, negative=uncond, guidance=5.0, guidance_2=5.0):
+        runtime.bind_schedule(pipeline, timesteps, latent, cond, negative, guidance, guidance_2, 875.0, torch.bfloat16)
+
     with runtime.request_context():
-        bind_native_schedule(runtime, pipeline, timesteps, latent, cond, uncond, 5, torch.bfloat16, {})
-        assert runtime.plan.evaluations == 3
-        assert runtime.plan.scheduler_id == id(pipeline.scheduler)
+        bind()
+        assert runtime.components["transformer"].plan.evaluations == 3
+        assert runtime.routes == ("transformer",) * 3
+        assert runtime.scheduler_identity[:2] == (id(pipeline.scheduler), id(timesteps))
     for guidance, negative, batch in ((1, uncond, 1), (5, None, 1), (5, uncond, 2)):
         latent.shape = (batch, 16, 1, 2, 2)
         with runtime.request_context(), pytest.raises(ValueError):
-            bind_native_schedule(runtime, pipeline, timesteps, latent, cond, negative, guidance, torch.bfloat16, {})
+            bind(negative=negative, guidance=guidance, guidance_2=guidance)
     latent.shape = (1, 16, 1, 2, 2)
+    with runtime.request_context(), pytest.raises(ValueError, match="one guidance scale"):
+        bind(guidance_2=3.0)
+    pipeline.transformer_2 = object()
+    with runtime.request_context(), pytest.raises(ValueError, match="one transformer"):
+        bind()
+    pipeline.transformer_2 = None
     with runtime.request_context(), pytest.raises(ValueError, match="time grid"):
-        bind_native_schedule(runtime, pipeline, timesteps.clone(), latent, cond, uncond, 5, torch.bfloat16, {})
+        bind(timesteps=timesteps.clone())
 
 
 def test_request_revalidates_capabilities_after_install(backend_module, monkeypatch):
@@ -697,7 +604,7 @@ def test_request_revalidates_capabilities_after_install(backend_module, monkeypa
     with pytest.raises(ValueError, match="foreign hook"):
         with backend.request_context(pipeline, request()):
             pytest.fail("invalid request entered")
-    assert backend.runtime.state is None and not backend.runtime.active
+    assert backend.runtime.components["transformer"].state is None and not backend.runtime.active
     pipeline.foreign_hook = False
     with backend.request_context(pipeline, request()):
         assert backend.runtime.active
@@ -726,16 +633,3 @@ def test_wan22_install_preflight_and_low_component_ownership(backend_module, mon
         backend.refresh(pipeline)
     backend.disable(pipeline)
     assert not hasattr(pipeline, "_aligncache_runtime")
-
-
-def test_wan21_preprocessor_accepts_official_single_prompt_request():
-    env = definitions(
-        "vllm_omni/diffusion/models/wan2_1/pipeline_wan2_1_common.py",
-        {"_ensure_prompt_dict", "get_wan21_pre_process_func"},
-        {"OmniTextPrompt": dict},
-    )
-    req = request()
-    result = env["get_wan21_pre_process_func"](None)(req)
-    assert result is req
-    assert result.prompt["prompt"] == "prompt"
-    assert not hasattr(result, "prompts")

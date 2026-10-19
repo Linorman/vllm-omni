@@ -665,7 +665,7 @@ class Wan22Pipeline(
         if runtime is not None:
             # forward() may rebuild the scheduler from request extra_args after admission.
             if self._sample_solver != "unipc":
-                raise ValueError("align_cache: Wan2.2 requires the native UniPC sampler")
+                raise ValueError("align_cache: Wan requires the native UniPC sampler")
             runtime.bind_schedule(
                 self,
                 timesteps,

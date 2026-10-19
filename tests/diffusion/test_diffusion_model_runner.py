@@ -1667,7 +1667,8 @@ def aligncache_runner(monkeypatch, mocker):
 def _bind_aligncache_toy_step(runner):
     from vllm_omni.diffusion.cache.aligncache.state import GenerationSignature, SchedulePlan, StepContext
 
-    runtime = runner.cache_backend.runtime
+    # Wan2.1 profiles run one controller for the single transformer.
+    runtime = runner.cache_backend.runtime.components["transformer"]
     x = torch.ones(1, 1, 1, 1, 32)
     runtime.bind_schedule(
         SchedulePlan((2.0, 1.0), "toy", "{}"),
@@ -1716,8 +1717,8 @@ def test_aligncache_runner_failure_releases_state_and_preserves_original_error(a
     assert caught.value is error
     assert calls == (["cond"] if failure == "cond" else ["cond", "uncond"])
     assert not backend.runtime.active
-    assert backend.runtime.state is None
-    assert backend.runtime.plan is None
+    assert backend.runtime.components["transformer"].state is None
+    assert backend.runtime.components["transformer"].plan is None
     assert backend.runtime.last_summary["status"] == "failed"
     assert backend.runtime.last_summary["model_forward_calls"] == len(calls)
     assert all(anchor() is None for anchor in anchors)
@@ -1735,7 +1736,7 @@ def test_aligncache_runner_model_replacement_requires_reinstall(aligncache_runne
     with pytest.raises(RuntimeError, match="ownership"):
         runner.execute_model(_make_request())
     assert runner.pipeline.forward_calls == 0
-    assert old_runtime.state is None
+    assert old_runtime.components["transformer"].state is None
     backend.disable(runner.pipeline)
     backend.enable(runner.pipeline)
     assert backend.runtime is not old_runtime
@@ -1791,7 +1792,7 @@ def test_aligncache_cancellation_exits_forward_and_releases_state(aligncache_run
         assert output.aborted
         assert times["cancel"] <= times["forward_exit"] <= times["released"]
         assert not runner.cache_backend.runtime.active
-        assert runner.cache_backend.runtime.state is None
+        assert runner.cache_backend.runtime.components["transformer"].state is None
         assert all(anchor() is None for anchor in anchors)
         registry.finish(request.request_id)
         monkeypatch.setattr(runner.pipeline, "forward", lambda batch: [DiffusionOutput(output="recovered")])

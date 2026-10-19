@@ -1,21 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Wan21 T2V-1.3B structural allowlist and native CFG boundary."""
+"""Wan2.1 T2V admission on the shared Wan pipeline; Wan2.2 reuses its structural checks."""
 
-import json
 import math
 
 import torch
 
-from ..state import GenerationSignature, SchedulePlan, StepContext
-
 
 def validate_pipeline(pipeline, large=False):
     from vllm_omni.diffusion.models.schedulers import FlowUniPCMultistepScheduler
-    from vllm_omni.diffusion.models.wan2_1.pipeline_wan2_1 import Wan21Pipeline
-    from vllm_omni.diffusion.models.wan2_1.wan2_1_transformer import Wan21Transformer3DModel
+    from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2 import Wan22Pipeline
+    from vllm_omni.diffusion.models.wan2_2.wan2_2_transformer import WanTransformer3DModel
 
-    if type(pipeline) is not Wan21Pipeline or type(pipeline.transformer) is not Wan21Transformer3DModel:
-        raise ValueError("align_cache: requires native Wan21Pipeline / Wan21Transformer3DModel T2V")
+    if type(pipeline) is not Wan22Pipeline or pipeline.expand_timesteps or getattr(pipeline, "is_dmd", False):
+        raise ValueError("align_cache: Wan2.1 requires the native WanPipeline T2V path, not I2V/TI2V or subclasses")
+    if (
+        getattr(pipeline, "has_transformer_2", False)
+        or pipeline.transformer_2 is not None
+        or type(pipeline.transformer) is not WanTransformer3DModel
+    ):
+        raise ValueError("align_cache: Wan2.1 requires one native WanTransformer3DModel")
     if type(pipeline.scheduler) is not FlowUniPCMultistepScheduler:
         raise ValueError("align_cache: requires native FlowUniPCMultistepScheduler")
     validate_transformer(pipeline.transformer, large=large)
@@ -75,60 +78,3 @@ def validate_scheduler(scheduler):
         raise ValueError("align_cache.scheduler: custom corrector/solver unsupported")
     if not math.isfinite(scheduler.config.shift) or scheduler.config.shift <= 0:
         raise ValueError("align_cache.scheduler.shift: requires finite positive value")
-
-
-def bind_native_schedule(runtime, pipeline, timesteps, latents, cond, uncond, guidance, dtype, extra_kwargs):
-    if timesteps is not pipeline.scheduler.timesteps or len(timesteps) != pipeline.scheduler.num_inference_steps:
-        raise ValueError("align_cache.schedule: requires the scheduler's actual native time grid")
-    if extra_kwargs:
-        raise ValueError("align_cache: extra model conditions are unsupported")
-    if latents.ndim != 5 or latents.shape[0] != 1 or dtype != torch.bfloat16 or latents.device.type != "cuda":
-        raise ValueError("align_cache: requires B=1 CUDA BF16 transformer input")
-    if uncond is None or cond.shape[0] != 1 or uncond.shape[0] != 1 or guidance <= 1 or not math.isfinite(guidance):
-        raise ValueError("align_cache: requires stable positive/negative conditions and serial CFG > 1")
-    plan = SchedulePlan(
-        tuple(float(t) for t in timesteps),
-        type(pipeline.scheduler).__qualname__,
-        json.dumps(dict(pipeline.scheduler.config), sort_keys=True, default=str),
-        id(pipeline.scheduler),
-        id(timesteps),
-    )
-    signature = GenerationSignature(
-        runtime.epoch,
-        id(pipeline.transformer),
-        (id(cond), id(uncond)),
-        guidance,
-        tuple(latents.shape),
-        dtype,
-        latents.device,
-    )
-    runtime.bind_schedule(plan, signature)
-
-
-def validate_native_step(runtime, pipeline, index, t, guidance, positive, negative):
-    plan = runtime.plan
-    if plan is not None and plan.scheduler_id is not None:
-        if (
-            id(pipeline.scheduler) != plan.scheduler_id
-            or id(pipeline.scheduler.timesteps) != plan.schedule_id
-            or json.dumps(dict(pipeline.scheduler.config), sort_keys=True, default=str) != plan.scheduler_config
-        ):
-            raise ValueError("align_cache: scheduler/schedule changed within request")
-    if negative is None or positive["cache_name"] != "cond" or negative["cache_name"] != "uncond":
-        raise ValueError("align_cache: explicit conditional/unconditional pair required")
-    if positive["current_model"] is not pipeline.transformer or negative["current_model"] is not pipeline.transformer:
-        raise ValueError("align_cache: transformer binding changed")
-    x = positive["hidden_states"]
-    if negative["hidden_states"] is not x:
-        raise ValueError("align_cache: branches must share the same latent input")
-    step = StepContext(index, float(t), id(pipeline.transformer), guidance)
-    conditions = (id(positive["encoder_hidden_states"]), id(negative["encoder_hidden_states"]))
-    runtime._validate_step(step, x, conditions)
-    return step, x, conditions
-
-
-def native_pair(runtime, pipeline, index, t, guidance, positive, negative):
-    step, x, conditions = validate_native_step(runtime, pipeline, index, t, guidance, positive, negative)
-    return runtime.predict_pair(
-        step, x, conditions, lambda branch: pipeline.predict_noise(**(positive if branch == "cond" else negative))
-    )

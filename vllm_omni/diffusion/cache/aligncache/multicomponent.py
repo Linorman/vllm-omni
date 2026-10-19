@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Two independent Wan controllers with one request owner and capacity limit."""
+"""Per-transformer Wan controllers with one request owner and capacity limit.
+
+Wan2.1 T2V uses one controller; Wan2.2 T2V-A14B uses one per expert.
+"""
 
 import json
 import logging
@@ -15,14 +18,15 @@ from .state import GenerationSignature, SchedulePlan, StepContext
 logger = logging.getLogger(__name__)
 
 
-class Wan22Runtime:
+class WanRuntime:
     def __init__(self, config):
         self.config, self.mode = config, config.mode
         self.active = False
         self.last_summary = {}
-        # Each component has a disjoint half of the request-wide admission bound.
-        child_config = replace(config, max_cache_bytes=config.max_cache_bytes // 2, diagnostics=config.diagnostics)
-        self.components = {key: AlignCacheRuntime(child_config) for key in ("high", "low")}
+        keys = ("high", "low") if config.policy == "wan22_feedback_v1" else ("transformer",)
+        # Each component has a disjoint share of the request-wide admission bound.
+        child_config = replace(config, max_cache_bytes=config.max_cache_bytes // len(keys))
+        self.components = {key: AlignCacheRuntime(child_config) for key in keys}
         for child in self.components.values():
             child.emit_logs = False
         self.reset()
@@ -66,7 +70,7 @@ class Wan22Runtime:
                 self.last_summary[key] = sum(child.last_summary.get(key, 0) for child in self.components.values())
             if self.config.diagnostics != "off":
                 try:
-                    logger.info("AlignCache Wan2.2 request: %s", self.last_summary)
+                    logger.info("AlignCache Wan request: %s", self.last_summary)
                     if self.config.diagnostics == "trace":
                         logger.info(
                             "AlignCache component traces: %s",
@@ -92,12 +96,15 @@ class Wan22Runtime:
         if not self.active or self.routes is not None:
             raise RuntimeError("align_cache: schedule requires a fresh request")
         if latent_condition is not None or first_frame_mask is not None or pipeline.expand_timesteps:
-            raise ValueError("align_cache: Wan2.2 image-conditioned paths are not admitted")
+            raise ValueError("align_cache: Wan image-conditioned paths are not admitted")
         if x.ndim != 5 or x.shape[0] != 1 or x.device.type != "cuda" or dtype != torch.bfloat16:
             raise ValueError("align_cache: requires B=1 CUDA BF16 input")
         if uncond is None or cond.shape[0] != 1 or uncond.shape[0] != 1:
             raise ValueError("align_cache: serial CFG conditions required")
-        if boundary is None or not math.isfinite(boundary):
+        single = len(self.components) == 1
+        if single and (pipeline.transformer_2 is not None or guidance_low != guidance_high):
+            raise ValueError("align_cache: Wan2.1 requires one transformer and one guidance scale")
+        if not single and (boundary is None or not math.isfinite(boundary)):
             raise ValueError("align_cache: finite native boundary required")
         for guidance in (guidance_low, guidance_high):
             if not math.isfinite(guidance) or guidance <= 1:
@@ -109,11 +116,16 @@ class Wan22Runtime:
             raise ValueError("align_cache: strictly descending finite schedule required")
         config = json.dumps(dict(pipeline.scheduler.config), sort_keys=True, default=str)
         self.scheduler_identity = (id(pipeline.scheduler), id(timesteps), config)
-        self.routes = tuple("low" if t < boundary else "high" for t in values)
-        for key, model, guidance in (
-            ("high", pipeline.transformer, guidance_low),
-            ("low", pipeline.transformer_2, guidance_high),
-        ):
+        if single:
+            self.routes = ("transformer",) * len(values)
+            bindings = (("transformer", pipeline.transformer, guidance_low),)
+        else:
+            self.routes = tuple("low" if t < boundary else "high" for t in values)
+            bindings = (
+                ("high", pipeline.transformer, guidance_low),
+                ("low", pipeline.transformer_2, guidance_high),
+            )
+        for key, model, guidance in bindings:
             selected = tuple(t for t, route in zip(values, self.routes) if route == key)
             if not selected:
                 continue

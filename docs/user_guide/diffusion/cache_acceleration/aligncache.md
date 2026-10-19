@@ -11,15 +11,17 @@ name. The default is Wan2.1 1.3B.
 
 | Profile | Engineering adapter | Policy | Base threshold | Warmup / tail |
 | --- | --- | --- | --- | --- |
-| `wan21_reference_v1` | Native Wan2.1 T2V-1.3B | `wan21_feedback_v1` | 0.065 | 12 / 1 |
-| `wan21_14b_reference_v1` | Native Wan2.1 T2V-14B | `wan21_feedback_v1` | 0.065 | 12 / 1 |
+| `wan21_reference_v1` | Wan2.1 T2V-1.3B on `WanPipeline` | `wan21_feedback_v1` | 0.065 | 12 / 1 |
+| `wan21_14b_reference_v1` | Wan2.1 T2V-14B on `WanPipeline` | `wan21_feedback_v1` | 0.065 | 12 / 1 |
 | `wan22_t2v_reference_v1` | Native Wan2.2 T2V-A14B | `wan22_feedback_v1` | 0.078 | 9 / 1 per component |
 | `qwen21_reference_v1` | Native Qwen-Image-2.1 T2I | `qwen_flow_v1` | 0.12 | 5 / 2 |
 | `minimax_h3_reference_v1` | Native MiniMax-H3 T2VA, Euler | `minimax_h3_flow_v1` | Video 0.33, audio 0.165 | 5 / 1 |
 
 Admission requires one CUDA GPU, BF16 native weights, eager execution, one
-request and one output. Wan needs serial two-branch CFG; Qwen also admits a
-single conditional branch; H3 uses its native CFG-distilled joint AV forward.
+request and one output. Wan needs serial two-branch CFG; Wan2.1 checkpoints
+load through the shared `WanPipeline` with one transformer and one guidance
+scale. Qwen also admits a single conditional branch; H3 uses its native
+CFG-distilled joint AV forward.
 
 The following are rejected: batching, parallelism, quantization, LoRA, offload,
 compile/decode graphs, step execution, disaggregated stages, and paged KV. Also
