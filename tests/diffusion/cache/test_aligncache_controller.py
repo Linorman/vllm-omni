@@ -119,6 +119,63 @@ def test_temporary_storage_accounting_and_release():
     assert ledger.active_bytes == 0 and ledger.peak == 1024
 
 
+def test_native_callbacks_run_outside_the_dispatch_mode():
+    from torch.utils._python_dispatch import _get_current_dispatch_mode
+
+    ledger = TensorLedger()
+    with ledger:
+        assert _get_current_dispatch_mode() is ledger
+        with ledger.native():
+            # Native model kernels must not be routed through the ledger's Python dispatch.
+            assert _get_current_dispatch_mode() is None
+            workspace = torch.ones(8) + 1
+        assert _get_current_dispatch_mode() is ledger
+        assert ledger.active_bytes == 0
+    assert _get_current_dispatch_mode() is None and workspace.sum() == 16
+
+
+@pytest.mark.parametrize("observer_on_top", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+def test_native_preserves_other_modes_and_restores_after_nested_exit(observer_on_top, fail):
+    from contextlib import ExitStack
+
+    from torch.utils._python_dispatch import TorchDispatchMode, _get_current_dispatch_mode
+
+    class Observer(TorchDispatchMode):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            self.calls += 1
+            return func(*args, **(kwargs or {}))
+
+    ledger, observer = TensorLedger(), Observer()
+    modes = (ledger, observer) if observer_on_top else (observer, ledger)
+    with ExitStack() as stack:
+        for mode in modes:
+            stack.enter_context(mode)
+        try:
+            with ledger.native():
+                assert _get_current_dispatch_mode() is observer
+                with ledger.native():
+                    workspace = torch.ones(8)
+                assert ledger.suspended
+                workspace = workspace + 1
+                assert observer.calls == 2
+                assert ledger.active_bytes == 0
+                if fail:
+                    raise RuntimeError("native failure")
+        except RuntimeError as error:
+            assert fail and str(error) == "native failure"
+        assert not ledger.suspended
+        assert _get_current_dispatch_mode() is modes[-1]
+        tracked = torch.ones(8)
+        assert observer.calls == 3
+        assert ledger.active_bytes == tracked.untyped_storage().nbytes()
+    assert _get_current_dispatch_mode() is None
+
+
 def test_stride64_gates_do_not_subsample_risk_or_fit():
     c, state, x = state_with_anchor()
     residual = torch.arange(128, dtype=torch.float32) + 1

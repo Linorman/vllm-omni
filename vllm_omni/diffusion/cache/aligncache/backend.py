@@ -12,7 +12,7 @@ import torch
 from vllm_omni.diffusion.cache.base import CacheBackend
 
 from .adapters.wan21 import validate_pipeline
-from .config import AlignCacheConfig
+from .config import WAN22_EXPERT_PROFILES, AlignCacheConfig
 from .multicomponent import WanRuntime
 from .state import ModelBinding
 
@@ -20,7 +20,18 @@ if TYPE_CHECKING:
     from .flow import FlowRuntime
 
 
-def validate_execution_config(config):
+def is_online_fp8(quant_config) -> bool:
+    """Online FP8 only: checkpoint-serialized or other methods stay rejected."""
+    if getattr(quant_config, "is_checkpoint_fp8_serialized", False):
+        return False
+    components = getattr(quant_config, "component_configs", None)
+    if components is not None:
+        configs = [*components.values(), getattr(quant_config, "default_config", None)]
+        return all(c is None or is_online_fp8(c) for c in configs)
+    return hasattr(quant_config, "get_name") and quant_config.get_name() == "fp8"
+
+
+def validate_execution_config(config, quantization="none", policy="wan21_feedback_v1") -> None:
     if getattr(config, "stage_role", None) not in (None, "full"):
         raise ValueError("align_cache.stage_role: disaggregated stages are not supported")
     if getattr(config, "diffusion_kv_mode", "dense_legacy") != "dense_legacy":
@@ -35,11 +46,15 @@ def validate_execution_config(config):
         "streaming_output",
         "step_execution",
         "lora_path",
-        "quantization_config",
         "enable_sleep_mode",
     ):
         if getattr(config, name, None):
-            raise ValueError(f"align_cache.{name}: unsupported in wan21_feedback_v1")
+            raise ValueError(f"align_cache.{name}: unsupported for {policy}")
+    quant_config = getattr(config, "quantization_config", None)
+    if quant_config and not (quantization == "fp8" and is_online_fp8(quant_config)):
+        raise ValueError("align_cache.quantization_config: unsupported unless align_cache.quantization is fp8")
+    if quantization == "fp8" and not quant_config:
+        raise ValueError("align_cache.quantization: fp8 requires the engine's online FP8 quantization")
     if config.dtype not in (torch.bfloat16, "bfloat16", "bf16"):
         raise ValueError("align_cache.dtype: requires bfloat16")
     if getattr(config, "num_gpus", 1) not in (None, 1):
@@ -73,7 +88,7 @@ class AlignCacheBackend(CacheBackend):
         self.component_binding: tuple[object, ...] = ()
 
     def _components(self, pipeline):
-        if self.align_config.policy == "wan22_feedback_v1":
+        if self.align_config.profile in WAN22_EXPERT_PROFILES:
             return (pipeline.transformer, pipeline.transformer_2)
         return (pipeline.transformer,)
 
@@ -81,11 +96,11 @@ class AlignCacheBackend(CacheBackend):
         if self.align_config.policy in ("qwen_flow_v1", "minimax_h3_flow_v1"):
             from .adapters.flow import validate_pipeline as validate_flow
 
-            validate_flow(pipeline, self.align_config.policy)
+            validate_flow(pipeline, self.align_config.policy, self.align_config.quantization == "fp8")
         elif self.align_config.policy == "wan22_feedback_v1":
             from .adapters.wan22 import validate_pipeline as validate_wan22
 
-            validate_wan22(pipeline)
+            validate_wan22(pipeline, self.align_config.profile)
         elif self.align_config.profile == "wan21_14b_reference_v1":
             validate_pipeline(pipeline, large=True)
         else:
@@ -110,7 +125,7 @@ class AlignCacheBackend(CacheBackend):
             return
         if hasattr(pipeline, "_aligncache_runtime"):
             raise RuntimeError("align_cache: foreign runtime already installed")
-        validate_execution_config(pipeline.od_config)
+        validate_execution_config(pipeline.od_config, self.align_config.quantization, self.align_config.policy)
         self._validate_pipeline(pipeline)
         runtime: FlowRuntime | WanRuntime
         if self.align_config.policy == "qwen_flow_v1":
@@ -169,7 +184,7 @@ class AlignCacheBackend(CacheBackend):
         if req.sampling_params.lora_request is not None:
             raise ValueError("align_cache: request LoRA is unsupported")
         # Re-check admission: settings or hooks may change between requests.
-        validate_execution_config(pipeline.od_config)
+        validate_execution_config(pipeline.od_config, self.align_config.quantization, self.align_config.policy)
         self._validate_pipeline(pipeline)
         with runtime.request_context():
             yield

@@ -63,3 +63,24 @@ def test_bad_fields(overrides):
 def test_pathological_inputs_have_diagnostic_errors(value):
     with pytest.raises(ValueError, match="cache_config|align_cache"):
         AlignCacheConfig.parse(value)
+
+
+def test_quantization_switch_is_explicit_and_qwen_only():
+    assert AlignCacheConfig.parse().quantization == "none"
+    assert AlignCacheConfig.parse({"align_cache": {"profile": "qwen21_reference_v1"}}).quantization == "none"
+    qwen = AlignCacheConfig.parse({"align_cache": {"profile": "qwen21_reference_v1", "quantization": "fp8"}})
+    assert qwen.quantization == "fp8" and qwen.policy == "qwen_flow_v1"
+    assert qwen.config_hash != AlignCacheConfig.parse({"align_cache": {"profile": "qwen21_reference_v1"}}).config_hash
+    for profile in (
+        "wan21_reference_v1",
+        "wan21_14b_reference_v1",
+        "wan22_t2v_reference_v1",
+        "wan22_i2v_reference_v1",
+        "wan22_ti2v_reference_v1",
+        "minimax_h3_reference_v1",
+    ):
+        with pytest.raises(ValueError, match="quantization"):
+            AlignCacheConfig.parse({"align_cache": {"profile": profile, "quantization": "fp8"}})
+    for value in ("int8", "FP8", True, 8):
+        with pytest.raises(ValueError, match="quantization"):
+            AlignCacheConfig.parse({"align_cache": {"profile": "qwen21_reference_v1", "quantization": value}})

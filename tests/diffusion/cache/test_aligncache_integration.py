@@ -182,11 +182,62 @@ def test_install_failure_rolls_back(backend_module, monkeypatch):
         ("diffusion_kv_mode", "paged_scheduler"),
     ],
 )
-def test_static_rejections(backend_module, field, value):
+@pytest.mark.parametrize("policy", ["wan21_feedback_v1", "wan22_feedback_v1", "qwen_flow_v1", "minimax_h3_flow_v1"])
+def test_static_rejections(backend_module, field, value, policy):
     config = execution_config()
     setattr(config, field, value)
     with pytest.raises(ValueError, match=field):
+        backend_module.validate_execution_config(config, policy=policy)
+
+
+def fake_quant_config(name="fp8", checkpoint=False, components=None):
+    config = SimpleNamespace(get_name=lambda: name, is_checkpoint_fp8_serialized=checkpoint)
+    if components is not None:
+        config.component_configs, config.default_config = components, None
+    return config
+
+
+def test_quantization_requires_explicit_fp8_opt_in(backend_module):
+    config = execution_config()
+    config.quantization_config = fake_quant_config()
+    with pytest.raises(ValueError, match="quantization_config"):
         backend_module.validate_execution_config(config)
+    backend_module.validate_execution_config(config, "fp8")
+    components = {"transformer": fake_quant_config(), "text_encoder": None}
+    config.quantization_config = fake_quant_config("component", components=components)
+    backend_module.validate_execution_config(config, "fp8")
+    for rejected in (
+        fake_quant_config("int8"),
+        fake_quant_config(checkpoint=True),
+        fake_quant_config("component", components={"transformer": fake_quant_config("gguf")}),
+    ):
+        config.quantization_config = rejected
+        with pytest.raises(ValueError, match="quantization_config"):
+            backend_module.validate_execution_config(config, "fp8")
+    config.quantization_config = None
+    with pytest.raises(ValueError, match="requires the engine's online FP8"):
+        backend_module.validate_execution_config(config, "fp8")
+
+
+def test_backend_threads_quantization_opt_in_to_admission(backend_module, monkeypatch):
+    cache_config = {"align_cache": {"profile": "qwen21_reference_v1", "quantization": "fp8"}}
+    pipeline = SimpleNamespace(transformer=object(), od_config=execution_config())
+    backend = backend_module.AlignCacheBackend(cache_config)
+    monkeypatch.setattr(backend, "_validate_pipeline", lambda p: None)
+    with pytest.raises(ValueError, match="requires the engine's online FP8"):
+        backend.enable(pipeline)
+    pipeline.od_config.quantization_config = fake_quant_config()
+    backend.enable(pipeline)
+    pipeline.od_config.quantization_config = fake_quant_config("int8")
+    with pytest.raises(ValueError, match="quantization_config"):
+        with backend.request_context(pipeline, request()):
+            pytest.fail("invalid request entered")
+    pipeline.od_config.quantization_config = fake_quant_config()
+    with backend.request_context(pipeline, request()):
+        assert backend.runtime.active
+    default_backend = backend_module.AlignCacheBackend()
+    with pytest.raises(ValueError, match="quantization_config"):
+        default_backend.enable(SimpleNamespace(transformer=object(), od_config=pipeline.od_config))
 
 
 @pytest.mark.parametrize(
@@ -535,6 +586,7 @@ def test_precheck_precedes_loading_offload_compile(backend_module, monkeypatch):
     runner = cls()
     runner.od_config = execution_config()
     runner.od_config.cache_backend = "align_cache"
+    runner.od_config.cache_config = None
     runner.od_config.enforce_eager = False
     # No loader/offload/compile symbols supplied: attempting those would fail the test.
     with pytest.raises(ValueError, match="enforce_eager"):

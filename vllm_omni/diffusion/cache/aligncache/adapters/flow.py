@@ -14,7 +14,7 @@ import torch
 from ..flow import FlowRuntime
 
 
-def validate_pipeline(pipeline: Any, policy: str) -> None:
+def validate_pipeline(pipeline: Any, policy: str, quantized: bool = False) -> None:
     if any(name in vars(pipeline) for name in ("forward", "diffuse", "predict_noise", "combine_cfg_noise")):
         raise ValueError("align_cache: replaced native pipeline methods are unsupported")
     if policy == "qwen_flow_v1":
@@ -37,9 +37,18 @@ def validate_pipeline(pipeline: Any, policy: str) -> None:
             raise ValueError("align_cache: H3 requires native cfg-distilled MiniMaxH3Pipeline")
         if any(getattr(pipeline, name, None) is not None for name in ("_fasth3", "_fasth3_checkpoint", "_vdn")):
             raise ValueError("align_cache: FastH3/VDNH3 combinations are unsupported")
-    parameter = next(pipeline.transformer.parameters())
-    if parameter.dtype != torch.bfloat16 or parameter.device.type != "cuda":
-        raise ValueError("align_cache: flow model requires CUDA BF16 weights")
+    if quantized:
+        # Online FP8 keeps BF16 activations/outputs; FP8 weights carry FP32 scales.
+        parameters = list(pipeline.transformer.parameters())
+        dtypes = {p.dtype for p in parameters}
+        if torch.bfloat16 not in dtypes or not dtypes <= {torch.bfloat16, torch.float8_e4m3fn, torch.float32}:
+            raise ValueError("align_cache: quantized flow model requires BF16 with online FP8 weights")
+        if any(p.device.type != "cuda" for p in parameters):
+            raise ValueError("align_cache: flow model requires CUDA weights")
+    else:
+        parameter = next(pipeline.transformer.parameters())
+        if parameter.dtype != torch.bfloat16 or parameter.device.type != "cuda":
+            raise ValueError("align_cache: flow model requires CUDA BF16 weights")
     for module in pipeline.transformer.modules():
         if "forward" in vars(module) or any(
             getattr(module, key, None)
@@ -102,7 +111,8 @@ class QwenFlowRuntime(FlowRuntime):
         self._prefix_signature = signature
 
     def bind_qwen(self, pipeline, latents, timesteps, cond, uncond, cfg, scale, image_latents, extras):
-        if image_latents is not None or extras:
+        # The native T2I call always passes return_dict=False; any other kwarg is an extra condition.
+        if image_latents is not None or dict(extras) not in ({}, {"return_dict": False}):
             raise ValueError("align_cache: Qwen editing/additional conditions are not admitted")
         if latents.shape[0] != 1 or latents.device.type != "cuda":
             raise ValueError("align_cache: Qwen requires single-sample CUDA input")

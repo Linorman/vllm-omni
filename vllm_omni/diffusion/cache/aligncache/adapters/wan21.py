@@ -25,7 +25,7 @@ def validate_pipeline(pipeline, large=False):
     validate_scheduler(pipeline.scheduler)
 
 
-def validate_transformer(transformer, large=False):
+def validate_transformer(transformer, large=False, overrides=None):
     expected = {
         "in_channels": 16,
         "out_channels": 16,
@@ -37,6 +37,7 @@ def validate_transformer(transformer, large=False):
         "freq_dim": 256,
         "image_dim": None,
         "added_kv_proj_dim": None,
+        **(overrides or {}),
     }
     for key, value in expected.items():
         if getattr(transformer.config, key, None) != value:

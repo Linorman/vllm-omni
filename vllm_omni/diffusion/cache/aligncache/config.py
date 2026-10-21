@@ -10,6 +10,15 @@ import math
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from typing import Any
 
+# Reference task defaults: base threshold per Wan2.2 task, all with nine warmup pairs.
+WAN22_PROFILES = {
+    "wan22_t2v_reference_v1": 0.078,
+    "wan22_i2v_reference_v1": 0.065,
+    "wan22_ti2v_reference_v1": 0.065,
+}
+# A14B tasks route high/low-noise experts; TI2V-5B has one transformer.
+WAN22_EXPERT_PROFILES = ("wan22_t2v_reference_v1", "wan22_i2v_reference_v1")
+
 
 @dataclass(frozen=True)
 class Phases:
@@ -86,6 +95,7 @@ class AlignCacheConfig:
     tail_steps: int = 1
     max_cache_bytes: int = 1073741824
     diagnostics: str = "summary"
+    quantization: str = "none"
     flow: FlowConfig = field(default_factory=FlowConfig)
     phase: PhaseConfig = field(default_factory=PhaseConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
@@ -101,9 +111,13 @@ class AlignCacheConfig:
         namespace = normalize_namespace(value)
         defaults = cls()
         profile = namespace.get("profile", "wan21_reference_v1")
-        if profile == "wan22_t2v_reference_v1":
+        if isinstance(profile, str) and profile in WAN22_PROFILES:
             defaults = replace(
-                defaults, policy="wan22_feedback_v1", profile=profile, base_threshold=0.078, warmup_steps=9
+                defaults,
+                policy="wan22_feedback_v1",
+                profile=profile,
+                base_threshold=WAN22_PROFILES[profile],
+                warmup_steps=9,
             )
         elif profile == "wan21_14b_reference_v1":
             defaults = replace(defaults, profile=profile)
@@ -250,12 +264,13 @@ def _validate(c):
         "profile": (
             "wan21_reference_v1",
             "wan21_14b_reference_v1",
-            "wan22_t2v_reference_v1",
+            *WAN22_PROFILES,
             "qwen21_reference_v1",
             "minimax_h3_reference_v1",
         ),
         "mode": ("passthrough", "force_exact", "trace", "accelerate"),
         "diagnostics": ("off", "summary", "trace"),
+        "quantization": ("none", "fp8"),
     }.items():
         if getattr(c, key) not in legal:
             raise ValueError(f"align_cache.{key}: legal values {legal}")
@@ -265,13 +280,18 @@ def _validate(c):
             raise ValueError(f"align_cache.{path}: {rule}")
 
     check(
-        (c.policy == "wan22_feedback_v1") == (c.profile == "wan22_t2v_reference_v1"),
+        (c.policy == "wan22_feedback_v1") == (c.profile in WAN22_PROFILES),
         "profile",
-        "Wan2.2 policy requires wan22_t2v_reference_v1; Wan2.1 requires a Wan2.1 profile",
+        "Wan2.2 policy requires a Wan2.2 profile; Wan2.1 requires a Wan2.1 profile",
     )
     expected_policy = {"qwen21_reference_v1": "qwen_flow_v1", "minimax_h3_reference_v1": "minimax_h3_flow_v1"}
     if c.profile in expected_policy or c.policy in expected_policy.values():
         check(expected_policy.get(c.profile) == c.policy, "profile", "flow policy/profile mismatch")
+    check(
+        c.quantization == "none" or c.policy == "qwen_flow_v1",
+        "quantization",
+        "fp8 is only admitted for Qwen-Image-2.1",
+    )
     check(c.flow.audio_threshold >= 0, "flow.audio_threshold", "must be >= 0")
     check(c.flow.max_consecutive_skips >= 0, "flow.max_consecutive_skips", "must be >= 0")
     check(c.flow.max_time_gap > 0, "flow.max_time_gap", "must be > 0")

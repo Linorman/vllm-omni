@@ -979,7 +979,15 @@ def test_removed_hsdp_loading_strategies_are_rejected(strategy):
 
 
 @pytest.mark.parametrize(
-    "profile", ["wan21_reference_v1", "wan22_t2v_reference_v1", "qwen21_reference_v1", "minimax_h3_reference_v1"]
+    "profile",
+    [
+        "wan21_reference_v1",
+        "wan22_t2v_reference_v1",
+        "wan22_i2v_reference_v1",
+        "wan22_ti2v_reference_v1",
+        "qwen21_reference_v1",
+        "minimax_h3_reference_v1",
+    ],
 )
 def test_aligncache_namespace_survives_default_diffusion_stage(profile):
     from vllm_omni.diffusion.cache.aligncache.config import AlignCacheConfig

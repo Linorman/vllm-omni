@@ -184,6 +184,8 @@ def test_native_qwen_loop_prefill_scheduler_and_release(cfg, mode):
             pipeline.scheduler.timesteps,
             cfg,
             5.0 if cfg else 1.0,
+            # The native T2I call always passes this output-format flag.
+            additional_transformer_kwargs={"return_dict": False},
         )
     assert released == [True] and len(updates) == 30
     assert calls[0] == "cond" and (not cfg or calls[1] == "uncond")
@@ -312,6 +314,16 @@ def test_qwen_rejects_editing_at_bind():
     assert runtime.schedule is None
 
 
+@pytest.mark.parametrize("extras", [{"return_dict": True}, {"return_dict": False, "extra": 1}, {"extra": 1}])
+def test_qwen_rejects_extra_transformer_conditions_at_bind(extras):
+    from vllm_omni.diffusion.cache.aligncache.adapters.flow import QwenFlowRuntime
+
+    runtime = QwenFlowRuntime(config("qwen21_reference_v1"))
+    with runtime.request_context(), pytest.raises(ValueError, match="additional conditions"):
+        runtime.bind_qwen(None, None, None, None, None, False, 1.0, None, extras)
+    assert runtime.schedule is None
+
+
 def test_capacity_output_dtype_stays_bound_and_no_retry():
     runtime = FlowRuntime(config("qwen21_reference_v1", max_cache_bytes=1))
     with pytest.raises(ValueError, match="output contract"):
@@ -422,3 +434,34 @@ def test_overflowed_fit_keeps_previous_scale():
 
     x = torch.full((8,), 1e30)
     assert fit(x, x, 1.03, 0.9, 1.1) == 1.03
+
+
+def test_quantized_flow_weights_are_admitted_only_with_opt_in():
+    from types import SimpleNamespace
+
+    from diffusers import FlowMatchEulerDiscreteScheduler
+
+    from vllm_omni.diffusion.cache.aligncache.adapters.flow import validate_pipeline
+    from vllm_omni.diffusion.models.qwen_image_21.pipeline_qwen_image_21 import QwenImage21Pipeline
+    from vllm_omni.diffusion.models.qwen_image_21.qwen_image_21_transformer import QwenImage21Transformer2DModel
+
+    def pipeline(dtypes, device="cuda"):
+        transformer = object.__new__(QwenImage21Transformer2DModel)
+        torch.nn.Module.__init__(transformer)
+        transformer.parameters = lambda: iter([SimpleNamespace(dtype=d, device=torch.device(device)) for d in dtypes])
+        result = object.__new__(QwenImage21Pipeline)
+        torch.nn.Module.__init__(result)
+        result.transformer = transformer
+        result.scheduler = FlowMatchEulerDiscreteScheduler()
+        return result
+
+    quantized = pipeline((torch.float8_e4m3fn, torch.bfloat16, torch.float32))
+    validate_pipeline(quantized, "qwen_flow_v1", quantized=True)
+    with pytest.raises(ValueError, match="BF16"):
+        validate_pipeline(quantized, "qwen_flow_v1")
+    for dtypes in ((torch.float8_e4m3fn, torch.float32), (torch.bfloat16, torch.float16), (torch.bfloat16, torch.int8)):
+        with pytest.raises(ValueError, match="online FP8"):
+            validate_pipeline(pipeline(dtypes), "qwen_flow_v1", quantized=True)
+    with pytest.raises(ValueError, match="CUDA"):
+        validate_pipeline(pipeline((torch.bfloat16, torch.float8_e4m3fn), "cpu"), "qwen_flow_v1", quantized=True)
+    validate_pipeline(pipeline((torch.bfloat16,)), "qwen_flow_v1")

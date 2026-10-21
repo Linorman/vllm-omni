@@ -312,8 +312,10 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
 
         if self.od_config.cache_backend == "align_cache":
             from vllm_omni.diffusion.cache.aligncache.backend import validate_execution_config
+            from vllm_omni.diffusion.cache.aligncache.config import AlignCacheConfig
 
-            validate_execution_config(self.od_config)
+            align_config = AlignCacheConfig.parse(self.od_config.cache_config)
+            validate_execution_config(self.od_config, align_config.quantization, align_config.policy)
 
         if load_format == "dummy":
             return

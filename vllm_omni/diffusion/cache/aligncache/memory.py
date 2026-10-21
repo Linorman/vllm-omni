@@ -6,7 +6,7 @@ import weakref
 from contextlib import contextmanager
 
 import torch
-from torch.utils._python_dispatch import TorchDispatchMode
+from torch.utils._python_dispatch import TorchDispatchMode, _get_current_dispatch_mode, _pop_mode_temporarily
 from torch.utils._pytree import tree_flatten
 
 
@@ -57,11 +57,19 @@ class TensorLedger(TorchDispatchMode):
 
     @contextmanager
     def native(self):
+        """Suspend accounting while preserving other modes and nested suspension."""
+        suspended = self.suspended
         self.suspended = True
         try:
-            yield
+            if _get_current_dispatch_mode() is self:
+                # Remove only our topmost mode to avoid dispatch overhead in model forwards.
+                with _pop_mode_temporarily():
+                    yield
+            else:
+                # Another mode owns the stack top; keep its ordering and only skip accounting.
+                yield
         finally:
-            self.suspended = False
+            self.suspended = suspended
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
         output = func(*args, **(kwargs or {}))

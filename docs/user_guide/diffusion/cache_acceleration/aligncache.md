@@ -1,8 +1,7 @@
-# AlignCache (experimental)
+# AlignCache
 
 AlignCache predicts selected diffusion model outputs while retaining the native
-scheduler steps. Output quality and speed depend on the checkpoint and workload;
-no production guarantee is implied.
+scheduler steps. Output quality and speed depend on the checkpoint and workload.
 
 ## Profiles and admission
 
@@ -14,20 +13,32 @@ name. The default is Wan2.1 1.3B.
 | `wan21_reference_v1` | Wan2.1 T2V-1.3B on `WanPipeline` | `wan21_feedback_v1` | 0.065 | 12 / 1 |
 | `wan21_14b_reference_v1` | Wan2.1 T2V-14B on `WanPipeline` | `wan21_feedback_v1` | 0.065 | 12 / 1 |
 | `wan22_t2v_reference_v1` | Native Wan2.2 T2V-A14B | `wan22_feedback_v1` | 0.078 | 9 / 1 per component |
+| `wan22_i2v_reference_v1` | Native Wan2.2 I2V-A14B on `WanImageToVideoPipeline` | `wan22_feedback_v1` | 0.065 | 9 / 1 per component |
+| `wan22_ti2v_reference_v1` | Native Wan2.2 TI2V-5B on `WanPipeline` | `wan22_feedback_v1` | 0.065 | 9 / 1 |
 | `qwen21_reference_v1` | Native Qwen-Image-2.1 T2I | `qwen_flow_v1` | 0.12 | 5 / 2 |
 | `minimax_h3_reference_v1` | Native MiniMax-H3 T2VA, Euler | `minimax_h3_flow_v1` | Video 0.33, audio 0.165 | 5 / 1 |
 
 Admission requires one CUDA GPU, BF16 native weights, eager execution, one
 request and one output. Wan needs serial two-branch CFG; Wan2.1 checkpoints
 load through the shared `WanPipeline` with one transformer and one guidance
-scale. Qwen also admits a single conditional branch; H3 uses its native
-CFG-distilled joint AV forward.
+scale. Wan2.2 A14B profiles keep one controller per high/low-noise expert;
+TI2V-5B uses one controller and one guidance scale, with or without its
+first-frame image. I2V-A14B predicts the noisy latent channels and keeps the
+concatenated image condition native. Qwen also admits a single conditional
+branch; H3 uses its native CFG-distilled joint AV forward.
 
-The following are rejected: batching, parallelism, quantization, LoRA, offload,
+Quantization is rejected unless a Qwen-Image-2.1 profile sets
+`quantization` to `fp8`, which admits only the engine's online FP8
+(`--quantization fp8`) and still requires BF16 activations; checkpoint-serialized
+FP8 and other methods remain rejected. FP8 outputs differ from BF16, so compare
+`none` and `force_exact` under the same quantization before using `accelerate`.
+
+The following are rejected: batching, parallelism, other quantization, LoRA, offload,
 compile/decode graphs, step execution, disaggregated stages, and paged KV. Also
 rejected are Qwen image editing and extra transformer conditions, H3 reference
 media, editing, locked audio, refine/upscale, continuation, FastH3 and VDNH3,
-and Wan image-conditioned variants.
+Wan2.1 I2V/FLF2V checkpoints with CLIP image embeddings, and Wan2.2 S2V,
+Animate and VACE.
 
 ## Configuration
 
@@ -93,6 +104,7 @@ fields override deploy fields; unspecified nested settings survive the merge.
 | `warmup_steps`, `tail_steps` | Profile values; nonnegative integers |
 | `max_cache_bytes` | `1073741824`; positive integer, controller memory only |
 | `diagnostics` | `summary`; `off`, `summary`, or `trace` |
+| `quantization` | `none`; `fp8` only with `qwen21_reference_v1` and online FP8 |
 | `phase.early_end`, `phase.late_start` | Wan/H3: 0.15 / 0.86; Qwen: 0.2 / 0.8; ordered within [0, 1] |
 | `phase.scales` | Wan/H3: 1.15 / 1 / 0.8; Qwen: 0.85 / 1 / 0.85; nonnegative |
 
