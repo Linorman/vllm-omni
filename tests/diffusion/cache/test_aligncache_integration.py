@@ -96,21 +96,22 @@ def test_shared_config_roundtrip_explicit_foreign(shared_config):
             AlignCacheConfig.parse(value)
 
 
-def test_actual_engine_normalization(shared_config):
-    cls = definitions(
-        "vllm_omni/engine/omni_engine_base.py",
-        {"OmniEngineBase"},
-        {"json": json, "logger": logging.getLogger(__name__)},
-        {"_normalize_cache_config", "_get_default_cache_config"},
-    )["OmniEngineBase"]
+def test_actual_diffusion_ingress_normalization(shared_config):
+    import warnings
+
+    normalize = definitions(
+        "vllm_omni/diffusion/data.py",
+        {"normalize_omni_diffusion_kwargs", "_move_diffusion_alias"},
+        {"os": os, "torch": torch, "json": json, "warnings": warnings, "logger": logging.getLogger(__name__)},
+    )["normalize_omni_diffusion_kwargs"]
     for value in (None, {"align_cache": {"mode": "trace"}}, '{"align_cache":{"mode":"trace"}}'):
-        result = cls._normalize_cache_config("align_cache", value)
+        result = normalize({"cache_backend": "align_cache", "cache_config": value})["cache_config"]
         final_worker = shared_config.from_dict(result)
         assert AlignCacheConfig.parse(final_worker).mode == ("accelerate" if value is None else "trace")
     for value in ("{", "[]", "true", '"nested"'):
         with pytest.raises(ValueError):
-            cls._normalize_cache_config("align_cache", value)
-    assert cls._normalize_cache_config("tea_cache", "{") == cls._get_default_cache_config("tea_cache")
+            normalize({"cache_backend": "align_cache", "cache_config": value})
+    assert "cache_config" not in normalize({"cache_backend": "tea_cache", "cache_config": "{"})
 
 
 def test_install_refresh_disable_ownership(backend_module, monkeypatch):
@@ -539,7 +540,7 @@ def test_worker_rejects_lora_before_activation():
     )["DiffusionWorker"]
     worker = cls()
     worker.model_runner = object()
-    worker.lora_manager = SimpleNamespace(set_active_adapter=lambda *args: pytest.fail("weights must not change"))
+    worker.lora_manager = SimpleNamespace(set_request_adapter=lambda *args: pytest.fail("weights must not change"))
     req = request()
     req.sampling_params.lora_request = object()
     with pytest.raises(ValueError, match="LoRA"):
