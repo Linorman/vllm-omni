@@ -181,6 +181,7 @@ def test_install_failure_rolls_back(backend_module, monkeypatch):
         ("streaming_output", True),
         ("stage_role", "denoise"),
         ("diffusion_kv_mode", "paged_scheduler"),
+        ("kv_offload_config", {"mode": "on"}),
     ],
 )
 @pytest.mark.parametrize("policy", ["wan21_feedback_v1", "wan22_feedback_v1", "qwen_flow_v1", "minimax_h3_flow_v1"])
@@ -189,6 +190,29 @@ def test_static_rejections(backend_module, field, value, policy):
     setattr(config, field, value)
     with pytest.raises(ValueError, match=field):
         backend_module.validate_execution_config(config, policy=policy)
+
+
+@pytest.mark.parametrize(
+    "profile", ["wan21_reference_v1", "wan22_t2v_reference_v1", "qwen21_reference_v1", "minimax_h3_reference_v1"]
+)
+def test_kv_offload_rejected_before_installation_and_at_request_entry(backend_module, monkeypatch, profile):
+    backend = backend_module.AlignCacheBackend({"align_cache": {"profile": profile}})
+    pipeline = SimpleNamespace(transformer=object(), transformer_2=object(), od_config=execution_config())
+    monkeypatch.setattr(backend, "_validate_pipeline", lambda p: None)
+    pipeline.od_config.kv_offload_config = {"mode": "on"}
+    with pytest.raises(ValueError, match="align_cache.kv_offload_config"):
+        backend.enable(pipeline)
+    assert not backend.enabled and not hasattr(pipeline, "_aligncache_runtime")
+    pipeline.od_config.kv_offload_config = None
+    backend.enable(pipeline)
+    pipeline.od_config.kv_offload_config = {"mode": "on"}
+    with pytest.raises(ValueError, match="align_cache.kv_offload_config"):
+        with backend.request_context(pipeline, request()):
+            pytest.fail("KV offload must not enter the AlignCache request")
+    assert not backend.runtime.active
+    pipeline.od_config.kv_offload_config = None
+    with backend.request_context(pipeline, request()):
+        assert backend.runtime.active
 
 
 def fake_quant_config(name="fp8", checkpoint=False, components=None):
@@ -579,7 +603,8 @@ def test_backend_invalid_request_and_default_context(backend_module, monkeypatch
             pass
 
 
-def test_precheck_precedes_loading_offload_compile(backend_module, monkeypatch):
+@pytest.mark.parametrize("invalid", [{"enforce_eager": False}, {"kv_offload_config": {"mode": "on"}}])
+def test_precheck_precedes_loading_offload_compile(backend_module, monkeypatch, invalid):
     monkeypatch.setitem(sys.modules, "vllm_omni.diffusion.cache.aligncache.backend", backend_module)
     cls = definitions(
         "vllm_omni/diffusion/worker/diffusion_model_runner.py", {"DiffusionModelRunner"}, {}, {"load_model"}
@@ -588,9 +613,10 @@ def test_precheck_precedes_loading_offload_compile(backend_module, monkeypatch):
     runner.od_config = execution_config()
     runner.od_config.cache_backend = "align_cache"
     runner.od_config.cache_config = None
-    runner.od_config.enforce_eager = False
+    for name, value in invalid.items():
+        setattr(runner.od_config, name, value)
     # No loader/offload/compile symbols supplied: attempting those would fail the test.
-    with pytest.raises(ValueError, match="enforce_eager"):
+    with pytest.raises(ValueError, match=next(iter(invalid))):
         runner.load_model()
 
 

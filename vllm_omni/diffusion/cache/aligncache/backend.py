@@ -38,6 +38,8 @@ def validate_execution_config(config, quantization="none", policy="wan21_feedbac
         raise ValueError("align_cache.diffusion_kv_mode: requires dense_legacy")
     if not config.enforce_eager:
         raise ValueError("align_cache.enforce_eager: must be True")
+    if getattr(config, "kv_offload_config", None) is not None:
+        raise ValueError(f"align_cache.kv_offload_config: unsupported for {policy}")
     for name in (
         "enable_cpu_offload",
         "enable_layerwise_offload",

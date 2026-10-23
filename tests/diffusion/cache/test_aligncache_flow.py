@@ -194,20 +194,41 @@ def test_native_qwen_loop_prefill_scheduler_and_release(cfg, mode):
     assert runtime.last_summary["model_forward_calls"] == len(calls)
 
 
-@pytest.mark.parametrize("mode", ["force_exact", "trace", "accelerate"])
-def test_native_h3_loop_preserves_av_solver_steps(mode):
+@pytest.mark.parametrize("mode", [None, "force_exact", "trace", "accelerate"])
+@pytest.mark.parametrize("failure", [None, "model", "solver", "cancel", "callback"])
+def test_native_h3_loop_preserves_av_solver_steps_and_cleanup(mode, failure):
     from contextlib import nullcontext
     from types import SimpleNamespace
 
     from tests.diffusion.cache.aligncache_helpers import definitions
 
-    steps = []
+    steps, progress, kv_events = [], [], []
+
+    class ReferenceKVState:
+        def begin_step(self, step, *, sigma):
+            kv_events.append(("begin", step))
+
+        def end_step(self):
+            kv_events.append(("end", None))
+
+        def close(self):
+            kv_events.append(("close", None))
+
+    def cancel(**kwargs):
+        if failure == "cancel":
+            raise RuntimeError("injected cancel")
+
+    def callback(*args):
+        if failure == "callback":
+            raise RuntimeError("injected callback")
 
     class Solver:
         def __init__(self, sigmas):
             self.sigmas = sigmas
 
         def step(self, x, x0, i):
+            if failure == "solver":
+                raise RuntimeError("injected solver")
             steps.append(i)
             return x + (x0 - x) * 0.01
 
@@ -225,8 +246,8 @@ def test_native_h3_loop_preserves_av_solver_steps(mode):
             "current_omni_platform": SimpleNamespace(is_npu=lambda: False),
             "minimax_h3_prepare_denoise_rows": prepare,
             "create_h3_sample_solver": lambda sampler, s: Solver(s),
-            "check_request_cancellation": lambda **kw: None,
-            "minimax_h3_publish_denoise_progress": lambda *a: None,
+            "check_request_cancellation": cancel,
+            "minimax_h3_publish_denoise_progress": lambda *a: progress.append(a),
             "minimax_h3_prepare_edit_rows": lambda rows, *a, **kw: (rows, None),
             "minimax_h3_rf_v_to_x0": lambda x, v, t: x - (1 - t) * v,
         },
@@ -235,16 +256,22 @@ def test_native_h3_loop_preserves_av_solver_steps(mode):
         update_mask_dev=torch.ones(8, dtype=torch.bool),
         audio_update_mask_dev=torch.ones(8, dtype=torch.bool),
         locked_audio_rows=None,
+        update_mask=torch.ones(8, dtype=torch.bool),
+        static_kwargs={"preserved": True},
     )
     branch.forward_kwargs = lambda **kw: kw
     calls = []
 
     def model(**kw):
         calls.append(1)
+        if failure == "model":
+            raise RuntimeError("injected model")
         return kw["video_rows"] * 0.2 + 1, kw["audio_rows"] * 0.2 + 0.9
 
-    runtime = FlowRuntime(config("minimax_h3_reference_v1", mode))
-    with runtime.request_context():
+    model.create_reference_kv_state = lambda **kwargs: ReferenceKVState() if mode is None else None
+    runtime = FlowRuntime(config("minimax_h3_reference_v1", mode)) if mode is not None else None
+    outcome = pytest.raises(RuntimeError, match=f"injected {failure}") if failure else nullcontext()
+    with outcome, runtime.request_context() if runtime else nullcontext():
         env["minimax_h3_denoise_loop"](
             model=model,
             positive=branch,
@@ -255,10 +282,23 @@ def test_native_h3_loop_preserves_av_solver_steps(mode):
             sigmas_audio=torch.linspace(1, 0, 31).tolist(),
             device=torch.device("cpu"),
             aligncache_runtime=runtime,
+            on_step=callback,
         )
-    assert steps == [i for i in range(30) for _ in range(2)]
-    assert len(calls) < 30 if mode == "accelerate" else len(calls) == 30
-    assert runtime.last_summary["model_forward_calls"] == len(calls)
+    assert progress[-1] == (None, None, None)
+    assert branch.static_kwargs == {"preserved": True}
+    if runtime is not None:
+        assert not runtime.active and not runtime.streams
+        assert kv_events == []
+    else:
+        assert kv_events[-1] == ("close", None)
+        if failure is None:
+            assert [event for event, _ in kv_events].count("begin") == 30
+            assert [event for event, _ in kv_events].count("end") == 30
+    if failure is None:
+        assert steps == [i for i in range(30) for _ in range(2)]
+        assert len(calls) < 30 if mode == "accelerate" else len(calls) == 30
+        if runtime is not None:
+            assert runtime.last_summary["model_forward_calls"] == len(calls)
 
 
 @pytest.mark.parametrize(

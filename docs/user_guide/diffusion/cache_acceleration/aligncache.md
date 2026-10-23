@@ -34,7 +34,8 @@ FP8 and other methods remain rejected. FP8 outputs differ from BF16, so compare
 `none` and `force_exact` under the same quantization before using `accelerate`.
 
 The following are rejected: batching, parallelism, other quantization, LoRA, offload,
-compile/decode graphs, step execution, disaggregated stages, and paged KV. Also
+reference-KV caching/offload (`kv_offload_config`), compile/decode graphs, step
+execution, disaggregated stages, and paged KV. Also
 rejected are Qwen image editing and extra transformer conditions, H3 reference
 media, editing, locked audio, refine/upscale, continuation, FastH3 and VDNH3,
 Wan2.1 I2V/FLF2V checkpoints with CLIP image embeddings, and Wan2.2 S2V,
